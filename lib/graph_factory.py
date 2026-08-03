@@ -164,8 +164,7 @@ class GraphFactory():
                 G = nx.hypercube_graph(k)
 
         if G == None:
-            print(f"Could not generate a {gtype} graph with κ(G)>{self.b}")
-            return None
+            raise ValueError(f"Could not generate a {gtype} graph with κ(G)>{self.b}")
 
         match weights:
             case "MH":

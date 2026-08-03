@@ -2,16 +2,7 @@ import numpy as np
 import scipy.linalg as sla
 from scipy.special import softmax, log_softmax 
 from sklearn.linear_model import LogisticRegression
-
-# Compute regularized pi-weighted and normal empirical loss
-def calc_opt_k(theta_ref, dp, X_aug, y_train, C, H, pi, reg_lambda):
-    F_Si_arr = np.zeros(len(H))
-    for i in range(len(H)):
-        node_idx = H[i]
-        Xl, yl = X_aug[dp[node_idx]], y_train[dp[node_idx]]
-        ce_loss = -(np.eye(C, dtype=int)[yl] * log_softmax(Xl @ theta_ref, axis=1)).sum(axis=1)
-        F_Si_arr[i] = ce_loss.mean() + (0.5 * reg_lambda * (np.linalg.norm(theta_ref)**2))
-    return F_Si_arr.mean(), np.average(F_Si_arr, weights=pi)
+from sklearn.metrics import log_loss
 
 # Compute left Perron vector and effective mixing honest submatrix
 def effective_mixing(W, H, gamma_C):
@@ -40,56 +31,49 @@ def effective_mixing(W, H, gamma_C):
 
     return Wbar, pi, lam_pi
 
-class SimulationMetricsCalculator():
-    def __init__(self, sim_params, config, global_dataset, rng):
-        self.W, self.H, self.B, self.dp, self.pi = sim_params 
-
-        self.X_train = global_dataset['X_aug']
+class MetricsCalculator():
+    def __init__(self, config, global_dataset, rng):
+        self.X_train = global_dataset['X_train']
         self.y_train = global_dataset['y_train']
-        self.X_test = global_dataset['X_aug']
-        self.y_test = global_dataset['y_train']
+        self.X_test = global_dataset['X_test']
+        self.y_test = global_dataset['y_test']
+        self.C = global_dataset['num_classes']
 
-        self.C = global_dataset['C']
+        self.reg_param = config['reg_param']
         self.alpha_init = config['alpha_init']
-
         self.rng = rng
-        
-        self.X_shards = [self.X_train[self.dp[i]] for i in self.H]
-        self.X_H = np.vstack(self.X_shards)
-        self.y_H = np.concatenate([self.y_train[self.dp[i]] for i in self.H])
 
-        self.reg_param = config
-
-    def calc_local_opt(self):
+    @staticmethod
+    def calc_local_opt(X_H, y_H, H, pi, dp, reg_param, rng):
         lr_args = dict(
             solver='lbfgs',
             l1_ratio=0,
-            C=1/self.reg_param,
+            C=1/reg_param,
             fit_intercept=False, 
             max_iter=1000,
-            random_state=np.random.RandomState(self.rng.integers(1_000_000))
+            random_state=np.random.RandomState(rng.integers(1_000_000))
         )
         
         pi_sample_weights = []
         unif_sample_weights = []
-        for node_idx, pi_i in zip(self.H, self.pi):
-            idx = self.dp[node_idx]
+        for node_idx, pi_i in zip(H, pi):
+            idx = dp[node_idx]
             pi_sample_weights.extend([pi_i / len(idx)] * len(idx))
-            unif_sample_weights.extend([(1/len(self.H)) / len(idx)] * len(idx))
+            unif_sample_weights.extend([(1/len(H)) / len(idx)] * len(idx))
         
         clf = LogisticRegression(**lr_args)
-        clf.fit(self.X_H, self.y_H, sample_weights=unif_sample_weights)
+        clf.fit(X_H, y_H, sample_weight=unif_sample_weights)
         clf_pi = LogisticRegression(**lr_args)
-        clf_pi.fit(self.X_H, self.y_H, sample_weight=pi_sample_weights)
+        clf_pi.fit(X_H, y_H, sample_weight=pi_sample_weights)
 
-        l2_penalty = lambda x: 0.5 * self.reg_param * np.linalg.norm(x)**2
+        l2_penalty = lambda x: 0.5 * reg_param * np.linalg.norm(x)**2
 
         return {
             'x_star': clf.coef_.T,
-            'F_star': log_loss(self.y_H, clf.predict_proba(self.X_H)) + l2_penalty(clf.coef_),
-            'F_pi_star': log_loss(self.y_H, clf_pi.predict_proba(self.X_H)) + l2_penalty(clf_pi.coef_),
+            'x_pi_star': clf_pi.coef_.T,
+            'F_star': log_loss(y_H, clf.predict_proba(X_H)) + l2_penalty(clf.coef_),
+            'F_pi_star': log_loss(y_H, clf_pi.predict_proba(X_H)) + l2_penalty(clf_pi.coef_),
         }
-
 
     @staticmethod 
     def calc_sigma_sq(theta, X, y, dp, H, C):
@@ -99,7 +83,7 @@ class SimulationMetricsCalculator():
             Xl, yl = X[dp[node_idx]], y[dp[node_idx]]
             Yl = np.eye(C)[yl]
             R = (softmax(Xl @ theta, axis=1) - Yl) 
-            sq = (Xl**2).sum(1) * (R**2).sum(1)        # ||g_j||_F² per sample
+            sq = (Xl**2).sum(1) * (R**2).sum(1)
             gbar = Xl.T @ R / len(yl)
             sigma_sq_arr[i] = float(sq.mean() - (gbar**2).sum())
         return np.max(sigma_sq_arr)
@@ -115,6 +99,17 @@ class SimulationMetricsCalculator():
         grad_hetero = np.linalg.norm(G - G.mean(0))**2
         return grad_hetero / len(H)
 
+    @staticmethod
+    def calc_zeta_sq_pi(theta, X, y, dp, H, pi, C):
+        G = np.empty((len(H), *theta.shape))
+        for i, node_idx in enumerate(H):
+            Xl, yl = X[dp[node_idx]], y[dp[node_idx]]
+            Yl = np.eye(C)[yl]
+            G[i] = Xl.T @ (softmax(Xl @ theta, axis=1) - Yl) / len(yl)
+        G_pi = np.tensordot(pi, G, axes=1)
+        D = G - G_pi
+        return float(pi @ (D ** 2).sum(axis=(1, 2)))
+
     @staticmethod 
     def calc_L_mu(theta_stack, X_shards, reg_param):
         Ls, mus = [], []
@@ -127,7 +122,6 @@ class SimulationMetricsCalculator():
     def nu2_pi_tot(W, H, pi, gamma_C):
         Wh = W[np.ix_(H, H)]
         h = len(H)
-
         Q = np.zeros((h, h))
         for a in range(h):
             for c in range(h):
@@ -136,23 +130,29 @@ class SimulationMetricsCalculator():
                     e[a] = 1.0
                     e[c] = -1.0
                     Q += pi[a] * Wh[a, c] ** 2 * np.outer(e, e)
+
         Q *= gamma_C * (1.0 - gamma_C)
-
         nu2 = float(sla.eigh(Q, np.diag(pi), eigvals_only=True).max())
-
         w_max = float((Wh - np.diag(np.diag(Wh))).max())
         upper_bound = 4.0 * (pi.max() / pi.min()) * w_max * gamma_C * (1.0 - gamma_C)
 
         return nu2, upper_bound
 
-    def __call__(self, models, tar_node, gamma_C, beta_C, proj_const):
+    def __call__(self, sim_params, models, gamma_C, beta_C, proj_const):
+        self.W, self.H, self.B, self.dp, self.pi = sim_params 
+        self.X_shards = [self.X_train[self.dp[i]] for i in self.H]
+        self.X_H = np.vstack(self.X_shards)
+        self.y_H = np.concatenate([self.y_train[self.dp[i]] for i in self.H])
+
         _, _, lam_pi = effective_mixing(self.W, self.H, gamma_C)
         nu2, upper_bound = self.nu2_pi_tot(self.W, self.H, self.pi, gamma_C)
         L, mu = self.calc_L_mu(models[self.H], self.X_shards, self.reg_param)
 
-        x_opt = self.calc_local_opt()['x_star']
-        zeta_sq = self.calc_zeta_sq(x_opt, self.X_train, self.y_train, self.H, self.dp, self.C)
-        sigma_sq = self.calc_sigma_sq(models[tar_node], self.X_train, self.y_train, self.dp, self.H, self.C)
+        local_opt_res = self.calc_local_opt(self.X_H, self.y_H, self.H, self.pi, self.dp, self.reg_param, self.rng)
+        x_opt = local_opt_res['x_star']
+        zeta_sq = self.calc_zeta_sq(x_opt, self.X_train, self.y_train, self.dp, self.H, self.C)
+        zeta_sq_pi = self.calc_zeta_sq_pi(x_opt, self.X_train, self.y_train, self.dp, self.H, self.pi, self.C)
+        sigma_sq = self.calc_sigma_sq(x_opt, self.X_train, self.y_train, self.dp, self.H, self.C)
         
         s2 = lam_pi ** 2 + nu2
         g = 1.0 - s2
@@ -172,10 +172,13 @@ class SimulationMetricsCalculator():
         Z = min([len(self.dp[i]) for i in self.H])
         
         unif_dist = (1/h)*np.ones(h)
-        opt_gap = (3/(mu**2))*(
+        opt_gap_ub = (3/(mu**2))*(
             (zeta_sq*h*np.linalg.norm(self.pi-unif_dist, 2)**2) +
             ((sigma_sq/Z)*((1/h)+np.max(self.pi)))
         )
+
+        opt_gap_emp = ((local_opt_res['x_star'] - local_opt_res['x_pi_star'])**2).sum()
+
         
         eps_opt = (8*L*(1+(beta_C*dB_max))) / (mu*m*n)
         eps_byz = (8*m*tau*beta_C*dB_pi) / (a*mu*n)
@@ -188,11 +191,16 @@ class SimulationMetricsCalculator():
                     L=L,                                 # L-smoothness
                     mu=mu,                               # mu-convexity mu
                     tau=tau,                             # projection radius at k=0
-                    m=m,                                 # number of honest nodes
+                    h=h,                                 # number of honest nodes
                     n_loc=n,                             # minimum dirichlet shard size 
+                    f_star=local_opt_res['F_star'],
+                    f_pi_star=local_opt_res['F_pi_star'],
+                    zeta_sq_pi=zeta_sq_pi,
+                    sigma_sq=sigma_sq,
                     dB_max=dB_max, 
                     dB_pi=dB_pi,
-                    opt_gap=opt_gap,                     # optimality gap from using non-stationary pi
+                    opt_gap_ub=opt_gap_ub,               # theoretical upper bound of optimality gap \|x^*-x_pi^*\| (lemma 11)
+                    opt_gap_emp=opt_gap_emp,             # empirical optimality gap \|x^*-x_pi^*\|
                     eps_opt=eps_opt,  
                     eps_byz=eps_byz, 
                     epsilon=eps_opt + eps_byz,           # on average stability upper bound

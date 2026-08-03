@@ -1,77 +1,18 @@
 import threading
 import numpy as np
+import os
+import pandas as pd
 from sklearn.preprocessing import StandardScaler, RobustScaler, MinMaxScaler
 from sklearn.decomposition import PCA
 from sklearn.model_selection import train_test_split, cross_validate, GridSearchCV, KFold
-from sklearn.metrics import mean_squared_error, r2_score, accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, roc_curve, log_loss
+from sklearn.metrics import mean_squared_error, r2_score, accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, confusion_matrix, roc_curve, log_loss, precision_recall_curve, average_precision_score
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
 from graph_factory import GraphFactory
 from utils import rng, seed, sgd_grad, proj_tau, dirichlet_partition, get_alphas
 from dist_alg import byz_atk
-
-class MatrixSummaryFeatures(BaseEstimator, TransformerMixin):
-    def __init__(self, node_id, X_local, y_local, alphas):
-        self.X_local = X_local   # (n_loc, d) local (augmented) features
-        self.y_local = y_local   # (n_loc,)  local labels
-        self.node_id = node_id
-        self.alphas = alphas
-
-    def set_context(self, k, theta_ref, g):
-        self.theta_ref = np.asarray(theta_ref)  # (d, C) current model
-        self.g = g
-        self.iter = k
-        return self
-
-    def fit(self, X, y=None):
-        return self
-
-    @staticmethod
-    def _softmax_ce(logits, y):
-        z = logits - logits.max(axis=1, keepdims=True)
-        log_p = z - np.log(np.exp(z).sum(axis=1, keepdims=True))
-        return -log_p[np.arange(len(y)), y].mean()
-        
-    @staticmethod
-    def _shift_scores(theta_i, theta_j, eps=1e-12):
-        A = theta_i.T @ theta_j  # (C, C)
-        A /= (np.linalg.norm(theta_i, axis=0)[:, None] * np.linalg.norm(theta_j, axis=0)[None, :] + eps)
-        C = A.shape[0]
-        return np.array([np.mean(np.diag(np.roll(A, -s, axis=1))) for s in range(C)]) # (C,)
-
-    def transform(self, X):
-        m, d, C = X.shape
-        eps = 1e-12
-        th_i, gi = self.theta_ref, self.g.ravel()
-        Xl, yl = self.X_local, self.y_local
-
-        G = (th_i[None, ...] - X) / self.alphas[self.iter]  # (m,d,C)
-        Gf = G.reshape(m, -1)
-        Gn = np.linalg.norm(Gf, axis=1)
-        cos_g = (Gf @ gi) / (np.linalg.norm(Gf, axis=1) * np.linalg.norm(gi) + eps)   # (m,)
-        
-        r = np.log(Gn / (np.linalg.norm(gi) + eps) + eps)
-        sv = np.linalg.svd(G, compute_uv=False) # (m, min(d,C))
-        sr = (sv**2).sum(axis=1) / (sv[:, 0]**2 + eps)
-
-        M = (Xl.T @ np.eye(C)[yl]) / len(yl)  # (d,C)
-        sig = np.array([self._shift_scores(M, G[j]) for j in range(m)])   # (m,C)
-        margin = sig.max(axis=1) - sig[:, 0] 
-    
-        logits_i = Xl @ th_i
-        pred_i = logits_i.argmax(axis=1)
-        ce_i = self._softmax_ce(logits_i, yl)
-        H, ce_d, acc = np.empty(m), np.empty(m), np.empty(m)
-        for j in range(m):
-            logits_j = Xl @ X[j]
-            pred_j   = logits_j.argmax(axis=1)
-            p = np.bincount((pred_j - pred_i) % C, minlength=C) / len(pred_i) + eps
-            H[j] = -(p * np.log(p)).sum()
-            ce_d[j] = self._softmax_ce(logits_j, yl) - ce_i
-            acc[j] = (pred_j == yl).mean()
-
-        return np.column_stack([margin, H, r, sr, np.abs(cos_g), ce_d, acc])
+from preprocessor import MatrixSummaryFeatures as MSF
 
 class ByzClassifier():
     def __init__(self, config, global_dataset, rng):
@@ -101,16 +42,31 @@ class ByzClassifier():
         self.alphas = get_alphas(self.K, config)
         self.taus = proj_const * self.alphas
 
+
         # Shared Variables
         self.barrier = threading.Barrier(self.num_nodes) 
         self.models = np.zeros((self.num_nodes, self.X.shape[1], self.C))
         self.int_models = np.zeros((self.num_nodes, self.X.shape[1], self.C))
 
+    def init_preproc(self):
+        feat_names  = MSF.FEAT_NAMES
+        feature_idx = {n: i for i, n in enumerate(feat_names)}
+        assert len(feat_names) == MSF.N_FEATURES
+
+        heavy    = [n for n in feat_names if n in MSF.HEAVY]
+        bounded  = [n for n in feat_names if n not in heavy ]
+
+        self.feat_pre_proc = ColumnTransformer([
+            ('robust', RobustScaler(unit_variance=True), [feature_idx[n] for n in heavy]),
+            ('std',    StandardScaler(),                 [feature_idx[n] for n in bounded]),
+        ])
+        self.out_feat_names = heavy + bounded 
+
     def worker_DSGD(self, i, barrier, models, int_models, alphas, taus,
                          results, rng, beta_C=0.1, gamma_C=0.1):
 
         Xl, yl = self.X[self.dp[i]], self.y[self.dp[i]]
-        feat = MatrixSummaryFeatures(i, Xl, yl, alphas)
+        feat = MSF(i, Xl, yl, alphas)
         nbors = list(self.G.neighbors(i))
         byz_nbors = np.isin(nbors, self.B)
         hon_nbors = np.isin(nbors, self.H)
@@ -146,10 +102,13 @@ class ByzClassifier():
                                 'gamma_C':self.sim_gamma_C})
                        for i in self.H]
         
+
         byz_threads = [threading.Thread(target=byz_atk, 
-                        args=(i, self.barrier, self.models, self.int_models, 
-                              self.X[self.dp[i]], self.y[self.dp[i]], self.C, self.K, self.W, self.G, 
-                              self.reg_param, self.batch_sz, self.alphas, atk_type, rng('classifier', 'byz', sim_id, i)))
+                        args=(i, self.barrier, self.models, self.int_models, self.X, self.y, self.dp, 
+                              self.C, self.K, self.W, self.G, self.H,
+                              self.reg_param, self.batch_sz, self.alphas, self.taus, atk_type, rng('classifier', 'byz', sim_id, i)),
+                                        kwargs={'alie_z': None, 'num_nodes':self.num_nodes, 'b': self.b,
+                                                'ipm_eps':0.5})
                        for i in self.B]
         
         threads = hon_threads + byz_threads
@@ -163,19 +122,6 @@ class ByzClassifier():
         return X_C, y_C
 
     def run_simulations(self):
-        # Pre-process run iterates
-        feat_names = ['margin', 'entropy', 'log_norm_ratio', 'stable_rank', 'abs_cos_g', 'ce_diff', 'acc']
-        feature_idx = {n: i for i, n in enumerate(feat_names)}
-
-        heavy = [feature_idx['log_norm_ratio'], feature_idx['ce_diff']]
-        bounded = [feature_idx[n] for n in feat_names if feature_idx[n] not in heavy]
-
-        self.feat_pre_proc = ColumnTransformer([
-            ('robust', RobustScaler(unit_variance=True), heavy),
-            ('std',    StandardScaler(), bounded),
-        ])
-        self.out_feat_names = ['log_norm_ratio', 'ce_diff', 'margin', 'entropy', 'stable_rank', 'abs_cos_g', 'acc']
-
         # Gather data through simulated DSGD runs
         train_covariates, train_labels = [], []
         test_covariates, test_labels = [], []
@@ -186,9 +132,11 @@ class ByzClassifier():
             train_labels.append(y_C)
 
         for atk in self.training_attacks:
-            X_C, y_C = self.simulate(atk, 2)
+            X_C, y_C = self.simulate(atk, 29)
             test_covariates.append(X_C)
             test_labels.append(y_C)
+
+        self.init_preproc()
             
         X_C_train = self.feat_pre_proc.fit_transform(np.concatenate(train_covariates))
         y_C_train = np.concatenate(train_labels)
@@ -198,42 +146,58 @@ class ByzClassifier():
 
         return X_C_train, y_C_train, X_C_test, y_C_test
 
-    def train_and_eval(self, X_C_train, y_C_train, X_C_test, y_C_test):
+    def train_and_eval(self, X_C, y_C, quantile=0.8):
+        X_C_train, X_C_val, y_C_train, y_C_val = train_test_split(X_C, y_C, test_size=0.33, random_state=seed('classifier','tr-val-split'))
+
         lr_clf = LogisticRegression(class_weight='balanced', max_iter=1000, solver='lbfgs', 
                             random_state=seed(2, 'log-reg'))
         grid = GridSearchCV(lr_clf, param_grid={'C': [0.01, 0.1, 1.0, 10.0]}, cv=5, scoring='roc_auc', n_jobs=-1)
         grid.fit(X_C_train, y_C_train)
-
         self.best_est = grid.best_estimator_
-        y_C_pred = self.best_est.predict(X_C_test)
-        y_C_proba = self.best_est.predict_proba(X_C_test)[:, 1]
 
-        self.auc = roc_auc_score(y_C_test, y_C_proba)
-        self.fpr, self.tpr, self.thr = roc_curve(y_C_test, y_C_proba)
+        # return the best operating point based on validation dataset
+        y_C_proba = self.best_est.predict_proba(X_C_val)[:, 1]
+        fpr, tpr, roc_thr = roc_curve(y_C_val, y_C_proba)
+        idx = np.searchsorted(tpr, quantile, side='left')
+        self.opt_fpr = fpr[idx]
+        self.opt_fnr = 1-tpr[idx]
+        self.opt_tau = roc_thr[idx]
 
         return {
-            'test_acc': accuracy_score(y_C_test, y_C_pred),
-            'recall': recall_score(y_C_test, y_C_pred),
-            'roc-auc': self.auc,
-            'f1-score': f1_score(y_C_test, y_C_pred)
+            'C_fpr':self.opt_fpr,
+            'C_fnr':self.opt_fnr,
+            'C_tau':self.opt_tau,
         }
+
 
     def get_params(self):
         return self.best_est, self.feat_pre_proc
 
-    def clac_opt_operating_pt(self, quantile):
-        idx = np.searchsorted(self.tpr, quantile, side='left')
-        self.opt_fpr = self.fpr[idx]
-        self.opt_fnr = 1-self.tpr[idx]
-        self.opt_tau = self.thr[idx]
-        specs = {
-            'fpr':self.opt_fpr,
-            'fnr':self.opt_fnr,
-            'tau':self.opt_tau,
-        }
-        return specs
+    def test(self, X_C, y_C):
+        y_C_proba = self.best_est.predict_proba(X_C)[:, 1]
+        self.fpr, self.tpr, self.roc_thr = roc_curve(y_C, y_C_proba)
+        self.auc = roc_auc_score(y_C, y_C_proba)
+        self.prec, self.rec, self.pr_thr = precision_recall_curve(y_C, y_C_proba)
+        self.ap = average_precision_score(y_C, y_C_proba)
+        self.prevalence = float(y_C.mean())
 
-    def plot(self, ax):
+        j = int(np.searchsorted(self.pr_thr, self.opt_tau))
+        self.op_prec, self.op_rec = self.prec[j], self.rec[j]
+
+        y_C_proba = self.best_est.predict_proba(X_C)[:, 1]
+        y_C_pred = (y_C_proba >= self.opt_tau).astype(int)
+        tn, fp, fn, tp = confusion_matrix(y_C, y_C_pred).ravel()
+
+        return {'prevalence': y_C.mean(), 
+                'tau': self.opt_tau, 
+                'tn': tn, 'fp': fp, 'fn': fn, 'tp': tp,
+                'beta_C': fn/(fn+tp), 
+                'gamma_C': fp/(fp+tn),
+                'roc_auc': self.auc, 
+                'avg_prec': average_precision_score(y_C, y_C_proba)
+        }
+
+    def plot_roc(self, ax):
         ax.plot(self.fpr, self.tpr, label=f'ROC curve (AUC = {self.auc:.3f})', linewidth=2)
         ax.plot([0, 1], [0, 1], 'k--', label='Random classifier')
         ax.set_xlim([0.0, 1.0])
@@ -243,5 +207,31 @@ class ByzClassifier():
         ax.set_title('Byzantine Classifier ROC Curve')
         ax.legend(loc='lower right')
 
+    def plot_pr(self,ax):
+        ax.plot(self.rec, self.prec, label=f'PR curve (AP = {self.ap:.3f})', linewidth=2)
+        ax.axhline(self.prevalence, color='k', linestyle='--', label=f'Random classifier ({self.prevalence:.3f})')
+        ax.scatter([self.op_rec], [self.op_prec], color='red', zorder=5, label=f'Operating point (τ = {self.opt_tau:.3f})')
+        ax.set_xlim([0.0, 1.0])
+        ax.set_ylim([0.0, 1.05])
+        ax.set_xlabel('Recall (1 − FNR)')
+        ax.set_ylabel('Precision')
+        ax.set_title('Byzantine Classifier PR Curve')
+        ax.legend(loc='upper right')
+
+    def log_results(self, res, run_dir, run_id):
+        file_path = os.path.join(run_dir, "results.csv")
+        res['id'] = run_id
+
+        if not os.path.exists(file_path):
+            df_out = pd.DataFrame([res])
+            df_out.set_index('id', inplace=True)
+            df_out.to_csv(file_path)
+        else:
+            df_res = pd.DataFrame()
+            df_res = pd.read_csv(file_path, index_col='id')
+            df_res.loc[run_id] = res 
+            df_res.to_csv(file_path)
+
+        return res
 
 

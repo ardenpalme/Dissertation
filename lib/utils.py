@@ -1,11 +1,16 @@
 import zlib
 import numpy as np
 from scipy.special import softmax, log_softmax 
+from sklearn.datasets import fetch_openml
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.decomposition import PCA
+from sklearn.model_selection import train_test_split
 
-global_seed = 12345
+from config import GLOBAL_SEED
 
 def seed(*path):
-    return zlib.crc32(str((global_seed,) + path).encode())
+    return zlib.crc32(str((GLOBAL_SEED,) + path).encode())
 
 def rng(*path):
     return np.random.default_rng(seed(*path))
@@ -61,47 +66,49 @@ def dirichlet_partition(labels, n_clients, alpha, rng): #TODO understand
 def get_alphas(K, config):
     return config['alpha_init'] / (1.0 + (np.arange(K)*config['alpha_decay']))
 
-def parse(dat):
-    assert dat['train']['num_nodes'] == dat['sys']['num_nodes']
-    assert dat['train']['K'] == dat['sys']['K']
-    assert dat['train']['b'] == dat['sys']['b']
+def parse_results(data):
+    assert data['train']['num_nodes'] == data['sys']['num_nodes']
+    assert data['train']['K'] == data['sys']['K']
+    assert data['train']['b'] == data['sys']['b']
     
-    row = dat.copy()
-    row['n'] = dat['sys']['num_nodes']
-    row['K'] = dat['sys']['K']
-    row['b'] = dat['sys']['b']
-    row['sim_gamma_C'] = dat['train']['gamma_C']   # simulation FPR used in Bernoulli dropout (imposed)
-    row['sim_beta_C'] = dat['train']['beta_C']     # simulation FNR used in Bernoulli dropout (imposed)
-    row['val_gamma_C'] = dat['classifier']['fpr']  # measured FPR (distinct sim testset)
-    row['val_beta_C'] = dat['classifier']['fnr']   # measured FNR (distinct sim testset) 
-    row['val_auc'] = dat['classifier']['auc']      # measured AUC (distinct sim testset) 
-    row['tau_log'] = dat['classifier']['tau']      # ideal logistic reg. threshold tau that minimizes FNR on distinct sim testset
-    del row['classifier']
-
-    # Parse run results
-    for alg in ['RDSGD', 'IOS', 'SCC', 'TriMean', 'CooMed']:
-        row[f'{alg}_T3'] = dat['T3'][alg]['test_acc']
-    for alg in ['RDSGD', 'IOS', 'SCC', 'TriMean', 'CooMed', 'DSGD']:
-        row[f'{alg}_T0'] = dat['T0'][alg]['test_acc']
-    del row['T0']
-    del row['T3']
+    row = data.copy()
+    row['n'] = data['sys']['num_nodes']
+    row['K'] = data['sys']['K']
+    row['b'] = data['sys']['b']
+    row['atk_type'] = row['sys']['atk_type']
+    row['train_atks'] = set(row['train']['train_atks'])
+    row['val_atks'] = set(row['train']['val_atks'])
     
-    # Parse system fields
-    if 'atk_type' in row['sys'].keys():
-        row['atk_type'] = row['sys']['atk_type']
     del row['sys']
-
-    # Parse classifier training fields
-    train_keys = list(row['train'].keys())
-    if ('train_atks' in train_keys) and ('val_atks' in train_keys):
-        row['train_atks'] = set(row['train']['train_atks'])
-        row['val_atks'] = set(row['train']['val_atks'])
-    else:
-        row['train_atks'] = {row['atk_type']}
-        row['val_atks'] = {row['atk_type']}
     del row['train']
-    
-    if('x_star' in dat.keys()):
-        del row['x_star']
 
     return row
+
+def fetch_dataset(dataset):
+    global_dataset = dict()
+    if(dataset == 'MNIST'):
+        mnist = fetch_openml('mnist_784',parser = 'auto')
+        X = mnist.data
+        y = mnist.target.astype(int).to_numpy()
+
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=GLOBAL_SEED)
+
+        global_preproc = make_pipeline(
+            MinMaxScaler(),
+            PCA(n_components=0.93, svd_solver="full", random_state=GLOBAL_SEED, whiten=True),
+            StandardScaler(),
+        )
+
+        X_pca = global_preproc.fit_transform(X_train)
+        X_aug = np.hstack([X_pca, np.ones((X_pca.shape[0], 1))])
+        X_pca_test = global_preproc.transform(X_test)
+        X_aug_test = np.hstack([X_pca_test, np.ones((X_pca_test.shape[0], 1))])
+
+        global_dataset = {
+            'num_classes' : np.unique(y).shape[0],
+            'X_train': X_aug,
+            'y_train': y_train,
+            'X_test': X_aug_test,
+            'y_test': y_test
+        }
+    return global_dataset

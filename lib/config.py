@@ -1,0 +1,37 @@
+import numpy as np
+
+GLOBAL_SEED = 12345
+NUM_NODES = 20
+TARGET_PI_DIRICHLET_ALPHA = 10
+LOGFILE = "res.csv"
+CONFIG_RNG = np.random.default_rng(GLOBAL_SEED)
+
+BASE_CONF = {
+    'alpha_init':0.5,
+    'alpha_decay': 0.1,
+    'graph_type':'erdos-renyi',
+    'graph_weights':'MH_gen',
+    'graph_args': {
+        'er_p':min(1.0, 3.0 * np.log(NUM_NODES) / NUM_NODES),
+        'tar_pi_dir_alpha': TARGET_PI_DIRICHLET_ALPHA,
+        'MH_target_pi':CONFIG_RNG.dirichlet(np.full(NUM_NODES, TARGET_PI_DIRICHLET_ALPHA))
+    },
+    'reg_param':0.2,
+    'batch_sz':100, 
+    'data_heterogeneity': 1,
+    'sys' : {
+        'num_nodes': NUM_NODES,
+        'b': 5,
+        'K': 140,
+        'atk_type':'sign_flip',
+    },
+    'train': {
+        'gamma_C': 0.25,  
+        'beta_C': 0.5,
+        'train_atks': ['label_flip', 'sign_flip', 'gaussian', 'ALIE', 'IPM'],
+        'val_atks': ['label_flip', 'sign_flip', 'gaussian', 'ALIE', 'IPM'],
+    }
+}
+BASE_CONF['train']['num_nodes'] = BASE_CONF['sys']['num_nodes']
+BASE_CONF['train']['b'] = BASE_CONF['sys']['b']
+BASE_CONF['train']['K'] = BASE_CONF['sys']['K']
