@@ -6,28 +6,32 @@ TARGET_PI_DIRICHLET_ALPHA = 10
 LOGFILE = "res.csv"
 CONFIG_RNG = np.random.default_rng(GLOBAL_SEED)
 
+uniform_dist = (1/NUM_NODES) * np.ones(NUM_NODES)
+
 BASE_CONF = {
     'alpha_init':0.5,
     'alpha_decay': 0.1,
-    'graph_type':'erdos-renyi',
-    'graph_weights':'MH_gen',
+    'graph_type':'random-regular',
+    'graph_weights':'MH',
     'graph_args': {
+        #'geom_radius': 0.45,
         'er_p':min(1.0, 3.0 * np.log(NUM_NODES) / NUM_NODES),
-        'tar_pi_dir_alpha': TARGET_PI_DIRICHLET_ALPHA,
-        'MH_target_pi':CONFIG_RNG.dirichlet(np.full(NUM_NODES, TARGET_PI_DIRICHLET_ALPHA))
+        'rand_reg_deg':5,
+        #'tar_pi_dir_alpha': TARGET_PI_DIRICHLET_ALPHA,
+        #'MH_target_pi':CONFIG_RNG.dirichlet(np.full(NUM_NODES, TARGET_PI_DIRICHLET_ALPHA))
     },
     'reg_param':0.2,
     'batch_sz':100, 
     'data_heterogeneity': 1,
     'sys' : {
         'num_nodes': NUM_NODES,
-        'b': 5,
-        'K': 140,
+        'b': 4,
+        'K': 200,
         'atk_type':'sign_flip',
     },
     'train': {
-        'gamma_C': 0.25,  
-        'beta_C': 0.5,
+        'gamma_C': 0.12,
+        'beta_C': 0.1,
         'train_atks': ['label_flip', 'sign_flip', 'gaussian', 'ALIE', 'IPM'],
         'val_atks': ['label_flip', 'sign_flip', 'gaussian', 'ALIE', 'IPM'],
     }

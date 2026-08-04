@@ -1,93 +1,48 @@
 import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 
-_EPS = 1e-12
+FEATURE_NAMES = [
+    # --- reference: node i's own model (x_i-relative) ---
+    'cos_g',            # cos(x_i - x_j, g_i).  honest ~ +1, sign-flip ~ -1
+    'log_norm_ratio',   # log(||x_i - x_j|| / (alpha_k ||g_i||)).  gaussian: large
+    'stable_rank',      # spectral shape of the (d,C) disagreement matrix
+    'margin',           # best class-shift score minus identity-shift score
+    'shift_off_diag',   # 1 if the best shift is a non-identity permutation
+    'shift_conc',       # concentration of the shift-score profile
+    'entropy',          # entropy of pred_j - pred_i disagreement histogram
+    'ce_diff',          # CE(model_j) - CE(model_i) on i's local shard
+    'acc',              # accuracy of model_j on i's local shard
+ 
+    # --- reference: leave-one-out neighbourhood median (consensus-free) ---
+    'cos_dev_g',        # cos(x_j - med_{-j}, g_i).  sign-flip ~ +1, honest ~ 0
+    'log_dev_norm',     # log(||x_j - med_{-j}|| / median ||.||)
+    'cos_dev_scale',    # cos(deviation, per-coordinate MAD).  ALIE ~ -1
+    'cos_gbar',         # cos(x_i - x_j, median_{-j}(x_i - x)).  IPM ~ -1
+    'ce_diff_nbr',      # CE_j - median_{-j} CE.  label-flip: positive
+    'acc_dev',          # acc_j - median_{-j} acc.  label-flip: negative
+ 
+    # --- context: lets a nonlinear model learn regime-dependent boundaries ---
+    'log_alpha',        # log alpha_k
+    'k_frac',           # k / (K-1)
+]
 
-
-def _rank01(v):
-    """Within-neighbourhood rank in [0,1]; scale-free across nodes and iterations."""
-    m = len(v)
-    if m < 2:
-        return np.zeros(m)
-    order = np.empty(m)
-    order[np.argsort(v, kind='stable')] = np.arange(m)
-    return order / (m - 1)
-
-
-def _loo_median_mad(Xf):
-    """Leave-one-out coordinate-wise median and MAD. Xf: (m, D) -> (m, D), (m, D).
-
-    Leave-one-out matters: including x_j in its own reference statistic shrinks
-    dev_j toward zero by a factor (m-1)/m and, more importantly, lets a colluding
-    group set the reference it is measured against.
-    """
-    m = Xf.shape[0]
-    loc = np.empty_like(Xf)
-    scl = np.empty_like(Xf)
-    for j in range(m):
-        O = np.delete(Xf, j, axis=0)
-        mu = np.median(O, axis=0)
-        loc[j] = mu
-        scl[j] = 1.4826 * np.median(np.abs(O - mu), axis=0)
-    return loc, scl + _EPS
-
+# Heavy-tailed features get a RobustScaler; everything else a StandardScaler.
+HEAVY_FEATURES = ['log_norm_ratio', 'ce_diff', 'log_dev_norm', 'ce_diff_nbr']
 
 class MatrixSummaryFeatures(BaseEstimator, TransformerMixin):
-    """Per-message features for the Byzantine classifier C.
-
-    Three families:
-      (a) marginal  - message vs. receiver's own state (original 7 features)
-      (b) population - message vs. the empirical distribution of the m messages
-                       received this round.  Targets ALIE, which is defined as a
-                       displacement of the honest population statistics and is
-                       therefore invisible to (a) by construction.
-      (c) temporal   - message vs. the previous round's messages.  Targets the
-                       one-step staleness and the missing minibatch noise in any
-                       message synthesised from observed honest traffic.
-
-    Usage per iteration k (families (b),(c) need unbroken history, so push()
-    must be called on EVERY k, not only on k in sampled_iters):
-
-        feat.set_context(k, models[i], g)
-        Z = feat.transform(S)      # only when k in sampled_iters
-        feat.push(S)               # every k
-    """
-
-    N_FEATURES = 10
-    FEAT_NAMES = ['margin', 'entropy', 'log_norm_ratio', 'stable_rank',
-                  'cos_g', 'ce_diff', 'acc',
-                  'cos_dev_scale', 'neg_frac', 'centrality']
-    HEAVY = ['log_norm_ratio', 'ce_diff', 'centrality']
-
     def __init__(self, node_id, X_local, y_local, alphas):
         self.X_local = X_local   # (n_loc, d) local (augmented) features
         self.y_local = y_local   # (n_loc,)  local labels
         self.node_id = node_id
         self.alphas = alphas
-        self._prev_R = None      # (m, D) previous centred pseudo-gradients
-        self._prev_gbar = None   # (D,)   previous neighbourhood pseudo-gradient
 
     def set_context(self, k, theta_ref, g):
-        self.theta_ref = np.asarray(theta_ref)  # (d, C) current model
-        self.g = g
+        self.theta_ref = np.asarray(theta_ref)  # (d,C) current model of node i
+        self.g = g # (d,C) current local stochastic gradient
         self.iter = k
         return self
 
     def fit(self, X, y=None):
-        return self
-
-    def push(self, X):
-        """Store this round's statistics. Call every k, after transform()."""
-        G = (self.theta_ref[None, ...] - X) / self.alphas[self.iter]
-        Gf = G.reshape(X.shape[0], -1)
-        gbar = np.median(Gf, axis=0)
-        self._prev_R = Gf - gbar
-        self._prev_gbar = gbar
-        return self
-
-    def reset_history(self):
-        self._prev_R = None
-        self._prev_gbar = None
         return self
 
     @staticmethod
@@ -95,102 +50,128 @@ class MatrixSummaryFeatures(BaseEstimator, TransformerMixin):
         z = logits - logits.max(axis=1, keepdims=True)
         log_p = z - np.log(np.exp(z).sum(axis=1, keepdims=True))
         return -log_p[np.arange(len(y)), y].mean()
-
+        
     @staticmethod
-    def _shift_scores(theta_i, theta_j, eps=_EPS):
+    def _shift_scores(theta_i, theta_j, eps=1e-12):
         A = theta_i.T @ theta_j  # (C, C)
         A /= (np.linalg.norm(theta_i, axis=0)[:, None] * np.linalg.norm(theta_j, axis=0)[None, :] + eps)
         C = A.shape[0]
-        return np.array([np.mean(np.diag(np.roll(A, -s, axis=1))) for s in range(C)])  # (C,)
+        return np.array([np.mean(np.diag(np.roll(A, -s, axis=1))) for s in range(C)]) # (C,)
 
     def transform(self, X):
+        """X : (m, d, C) stacked intermediate models of the m in-neighbours."""
         m, d, C = X.shape
-        eps = _EPS
-        th_i, gi = self.theta_ref, self.g.ravel()
+        eps = 1e-12
+ 
+        th_i = self.theta_ref
+        gi = self.g.ravel()
+        gn = np.linalg.norm(gi) + eps
         Xl, yl = self.X_local, self.y_local
+        alpha_k = float(self.alphas[self.iter])
+        K = len(self.alphas)
 
-        G = (th_i[None, ...] - X) / self.alphas[self.iter]  # (m,d,C)
-        Gf = G.reshape(m, -1)
-        Gn = np.linalg.norm(Gf, axis=1)
-        cos_g = (Gf @ gi) / (Gn * np.linalg.norm(gi) + eps)   # (m,)
+        Xf = X.reshape(m, -1)                      # (m, D) flattened neighbour models
+        D3 = th_i[None, ...] - X                   # (m, d, C) raw disagreement
+        D = D3.reshape(m, -1)                      # (m, D)
+        Dn = np.linalg.norm(D, axis=1)
 
-        r = np.log(Gn / (np.linalg.norm(gi) + eps) + eps)
-        sv = np.linalg.svd(G, compute_uv=False)  # (m, min(d,C))
-        sr = (sv**2).sum(axis=1) / (sv[:, 0]**2 + eps)
+        # ------------------------------------------------------------------
+        # Block 1: x_i-relative features
+        # ------------------------------------------------------------------
+        # cos_g is invariant to positive rescaling of D, so dividing by alpha_k
+        # would not change it; the alpha_k division only ever mattered for the
+        # norm feature, where it is applied explicitly below.
+        cos_g = (D @ gi) / (Dn * gn + eps)
 
-        M = (Xl.T @ np.eye(C)[yl]) / len(yl)  # (d,C)
-        sig = np.array([self._shift_scores(M, G[j]) for j in range(m)])   # (m,C)
+        # Expressed in units of "one gradient step", so the feature is
+        # comparable across iterations with different alpha_k.
+        log_norm_ratio = np.log(Dn / (alpha_k * gn) + eps)
+ 
+        sv = np.linalg.svd(D3, compute_uv=False)            # (m, min(d,C))
+        stable_rank = (sv ** 2).sum(axis=1) / (sv[:, 0] ** 2 + eps)
+
+        M = (Xl.T @ np.eye(C)[yl]) / len(yl)                # (d, C) class-mean matrix
+        sig = np.array([self._shift_scores(M, D3[j]) for j in range(m)])   # (m, C)
         margin = sig.max(axis=1) - sig[:, 0]
+        shift_off_diag = (sig.argmax(axis=1) != 0).astype(float)
+        sig_pos = np.clip(sig, 0.0, None)
+        shift_conc = sig_pos.max(axis=1) / (sig_pos.sum(axis=1) + eps)
 
         logits_i = Xl @ th_i
         pred_i = logits_i.argmax(axis=1)
         ce_i = self._softmax_ce(logits_i, yl)
-        H, ce_d, acc = np.empty(m), np.empty(m), np.empty(m)
+ 
+        ent = np.empty(m)
+        ce_abs = np.empty(m)
+        acc = np.empty(m)
         for j in range(m):
             logits_j = Xl @ X[j]
             pred_j = logits_j.argmax(axis=1)
             p = np.bincount((pred_j - pred_i) % C, minlength=C) / len(pred_i) + eps
-            H[j] = -(p * np.log(p)).sum()
-            ce_d[j] = self._softmax_ce(logits_j, yl) - ce_i
+            ent[j] = -(p * np.log(p)).sum()
+            ce_abs[j] = self._softmax_ce(logits_j, yl)
             acc[j] = (pred_j == yl).mean()
+        ce_diff = ce_abs - ce_i
 
-        # ---- (b) population features -------------------------------------
-        # ALIE sends mu_{-j} - z * sigma_{-j}, so dev_j is negative in every
-        # coordinate and collinear with the dispersion vector.  Honest dev_j has
-        # near-random coordinate signs and no relation to sigma.  Median/MAD
-        # rather than mean/std because the receiver's own neighbourhood may
-        # contain Byzantine nodes; valid while b_i < m_i / 2.
-        Xf = X.reshape(m, -1)
+        # ------------------------------------------------------------------
+        # Block 2: leave-one-out neighbourhood-relative features
+        # ------------------------------------------------------------------
         if m >= 3:
-            loc, scl = _loo_median_mad(Xf)
-            dev = Xf - loc
+            dev = np.empty_like(Xf)  # (m,D)
+            scl = np.empty_like(Xf)  # (m,D)
+            gbar = np.empty_like(D)  # (m,D)
+            ce_med = np.empty(m)
+            acc_med = np.empty(m)
+            for j in range(m):
+                O = np.delete(Xf, j, axis=0)
+                mu = np.median(O, axis=0)
+                dev[j] = Xf[j] - mu
+                scl[j] = 1.4826 * np.median(np.abs(O - mu), axis=0) + eps
+                gbar[j] = np.median(np.delete(D, j, axis=0), axis=0)
+                ce_med[j] = np.median(np.delete(ce_abs, j))
+                acc_med[j] = np.median(np.delete(acc, j))
+
             dn = np.linalg.norm(dev, axis=1)
-
-            neg_frac = (dev < 0).mean(axis=1)                       # ALIE ~ 1.0
-            cos_dev_scale = ((dev * scl).sum(axis=1)
-                             / (dn * np.linalg.norm(scl, axis=1) + eps))   # ALIE ~ -1
-            zz = np.abs(dev) / scl
-            z_cv = zz.std(axis=1) / (zz.mean(axis=1) + eps)          # ALIE ~ 0
-            centrality = np.log(dn / (np.median(dn) + eps) + eps)    # ALIE < 0
-
-            Dm = np.linalg.norm(Xf[:, None, :] - Xf[None, :, :], axis=-1)
-            iu = np.triu_indices(m, 1)
-            pd_scale = np.median(Dm[iu]) + eps
-            np.fill_diagonal(Dm, np.inf)
-            dup_gap = np.log(Dm.min(axis=1) / pd_scale + eps)        # colluders < 0
-
-            gbar_loo = np.array([np.median(np.delete(Gf, j, axis=0), axis=0)
-                                 for j in range(m)])
-            cos_gbar = ((Gf * gbar_loo).sum(axis=1)
-                        / (Gn * np.linalg.norm(gbar_loo, axis=1) + eps))
+ 
+            # Honest: x_j - med ~ mixing noise, so cos ~ 0.
+            # Sign-flip: x_j - med ~ 2 alpha_k g, so cos ~ +1.
+            # The shared consensus offset cancels because the median carries it,
+            # and alpha_k scales numerator and denominator alike.
+            cos_dev_g = (dev @ gi) / (dn * gn + eps)
+            log_dev_norm = np.log(dn / (np.median(dn) + eps) + eps)
+            cos_dev_scale = ((dev * scl).sum(1) / (dn * np.linalg.norm(scl, axis=1) + eps))   # ALIE ~ -1
+            cos_gbar = ((D * gbar).sum(1) / (Dn * np.linalg.norm(gbar, axis=1) + eps))        # IPM ~ -1
+ 
+            # Semantic label-flip signal, referenced to the neighbourhood rather
+            # than to node i, for the same cancellation reason.
+            ce_diff_nbr = ce_abs - ce_med
+            acc_dev = acc - acc_med
         else:
-            neg_frac = np.full(m, 0.5)
-            cos_dev_scale = np.zeros(m)
-            z_cv = np.zeros(m)
-            centrality = np.zeros(m)
-            dup_gap = np.zeros(m)
-            cos_gbar = np.zeros(m)
+            # Too few messages for a leave-one-out reference: emit the honest
+            # null value rather than something the classifier can act on.
+            zeros = np.zeros(m)
+            cos_dev_g = zeros
+            log_dev_norm = zeros
+            cos_dev_scale = zeros
+            cos_gbar = zeros
+            ce_diff_nbr = zeros
+            acc_dev = zeros
 
-        # ---- (c) temporal features ---------------------------------------
-        # Honest innovation is a fresh minibatch gradient -> nearly white.
-        # ALIE's is -z * sigma^{k-1} -> smooth, autocorrelated, one step stale.
-        gbar_now = np.median(Gf, axis=0)
-        Rk = Gf - gbar_now
-        if self._prev_R is not None and self._prev_R.shape == Gf.shape:
-            Rp, gbar_p = self._prev_R, self._prev_gbar
-            resid_ac = ((Rk * Rp).sum(axis=1)
-                        / (np.linalg.norm(Rk, axis=1) * np.linalg.norm(Rp, axis=1) + eps))
-            lag_align = (
-                (Gf @ gbar_p) / (Gn * np.linalg.norm(gbar_p) + eps)
-                - (Gf @ gbar_now) / (Gn * np.linalg.norm(gbar_now) + eps)
-            )
-        else:
-            resid_ac = np.zeros(m)
-            lag_align = np.zeros(m)
-
-        return np.column_stack([
-            margin, H, r, sr, np.abs(cos_g), cos_g, ce_d, acc,
-            cos_dev_scale, neg_frac, z_cv, centrality, dup_gap, cos_gbar,
-            resid_ac, lag_align,
-            _rank01(r), _rank01(ce_d), _rank01(centrality),
+        # ------------------------------------------------------------------
+        # Block 3: context
+        # ------------------------------------------------------------------
+        log_alpha = np.full(m, np.log(alpha_k + eps))
+        k_frac = np.full(m, self.iter / max(K - 1, 1))
+ 
+        feats = np.column_stack([
+            cos_g, log_norm_ratio, stable_rank,
+            margin, shift_off_diag, shift_conc,
+            ent, ce_diff, acc,
+            cos_dev_g, log_dev_norm, cos_dev_scale, cos_gbar,
+            ce_diff_nbr, acc_dev,
+            log_alpha, k_frac,
         ])
+
+        assert feats.shape[1] == len(FEATURE_NAMES) 
+        return np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
+

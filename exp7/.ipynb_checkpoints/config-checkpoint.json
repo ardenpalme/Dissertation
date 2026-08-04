@@ -1,0 +1,60 @@
+{
+  "alpha_init": 0.5,
+  "alpha_decay": 0.1,
+  "graph_type": "random-regular",
+  "graph_weights": "MH",
+  "graph_args": {
+    "er_p": 0.4493598410330987,
+    "rand_reg_deg": 5
+  },
+  "reg_param": 0.2,
+  "batch_sz": 100,
+  "data_heterogeneity": 1,
+  "sys": {
+    "num_nodes": 20,
+    "b": 4,
+    "K": 200,
+    "atk_type": "sign_flip"
+  },
+  "train": {
+    "gamma_C": 0.12,
+    "beta_C": 0.1,
+    "train_atks": [
+      "label_flip",
+      "sign_flip",
+      "gaussian",
+      "ALIE",
+      "IPM"
+    ],
+    "val_atks": [
+      "label_flip",
+      "sign_flip",
+      "gaussian",
+      "ALIE",
+      "IPM"
+    ],
+    "num_nodes": 20,
+    "b": 4,
+    "K": 200
+  },
+  "proj_const": 1.608515959918358,
+  "C_fpr": 0.10456666666666667,
+  "C_fnr": 0.15000000000000002,
+  "C_tau": 0.6123135217390464,
+  "cv_ap": 0.9360930692980661,
+  "cv_params": {
+    "lr__C": 10.0,
+    "rbf__gamma": 0.02,
+    "rbf__n_components": 400
+  },
+  "prevalence": 0.175,
+  "tau": 0.6123135217390464,
+  "tn": 29798,
+  "fp": 3202,
+  "fn": 678,
+  "tp": 6322,
+  "beta_C": 0.09685714285714286,
+  "gamma_C": 0.09703030303030304,
+  "roc_auc": 0.9592381796536796,
+  "avg_prec": 0.882922547607033
+}

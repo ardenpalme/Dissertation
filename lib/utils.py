@@ -68,12 +68,13 @@ def get_alphas(K, config):
 
 def parse_results(data):
     assert data['train']['num_nodes'] == data['sys']['num_nodes']
-    assert data['train']['K'] == data['sys']['K']
     assert data['train']['b'] == data['sys']['b']
+    #assert data['train']['K'] == data['sys']['K']
     
     row = data.copy()
     row['n'] = data['sys']['num_nodes']
-    row['K'] = data['sys']['K']
+    row['sys_K'] = data['sys']['K']
+    row['train_K'] = data['train']['K']
     row['b'] = data['sys']['b']
     row['atk_type'] = row['sys']['atk_type']
     row['train_atks'] = set(row['train']['train_atks'])
