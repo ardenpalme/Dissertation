@@ -2,37 +2,18 @@ import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 
 FEATURE_NAMES = [
-    # --- reference: node i's own model (x_i-relative) ---
-    'cos_g',            # cos(x_i - x_j, g_i).  honest ~ +1, sign-flip ~ -1
-    'log_norm_ratio',   # log(||x_i - x_j|| / (alpha_k ||g_i||)).  gaussian: large
-    'stable_rank',      # spectral shape of the (d,C) disagreement matrix
-    'margin',           # best class-shift score minus identity-shift score
-    'shift_off_diag',   # 1 if the best shift is a non-identity permutation
-    'shift_conc',       # concentration of the shift-score profile
-    'entropy',          # entropy of pred_j - pred_i disagreement histogram
-    'ce_diff',          # CE(model_j) - CE(model_i) on i's local shard
-    'acc',              # accuracy of model_j on i's local shard
- 
-    # --- reference: leave-one-out neighbourhood median (consensus-free) ---
-    'cos_dev_g',        # cos(x_j - med_{-j}, g_i).  sign-flip ~ +1, honest ~ 0
-    'log_dev_norm',     # log(||x_j - med_{-j}|| / median ||.||)
-    'cos_dev_scale',    # cos(deviation, per-coordinate MAD).  ALIE ~ -1
-    'cos_gbar',         # cos(x_i - x_j, median_{-j}(x_i - x)).  IPM ~ -1
-    'ce_diff_nbr',      # CE_j - median_{-j} CE.  label-flip: positive
-    'acc_dev',          # acc_j - median_{-j} acc.  label-flip: negative
- 
-    # --- context: lets a nonlinear model learn regime-dependent boundaries ---
-    'log_alpha',        # log alpha_k
-    'k_frac',           # k / (K-1)
+    'cos_g', 'log_norm_ratio', 'stable_rank', 'margin',
+    'shift_off_diag', 'shift_conc', 'entropy', 'ce_diff',
+    'acc', 'cos_dev_g', 'log_dev_norm', 'cos_dev_scale',
+    'cos_gbar', 'ce_diff_nbr', 'acc_dev', 'log_alpha', 'k_frac',
 ]
 
-# Heavy-tailed features get a RobustScaler; everything else a StandardScaler.
 HEAVY_FEATURES = ['log_norm_ratio', 'ce_diff', 'log_dev_norm', 'ce_diff_nbr']
 
 class MatrixSummaryFeatures(BaseEstimator, TransformerMixin):
     def __init__(self, node_id, X_local, y_local, alphas):
-        self.X_local = X_local   # (n_loc, d) local (augmented) features
-        self.y_local = y_local   # (n_loc,)  local labels
+        self.X_local = X_local # (n_loc, d) local (augmented) features
+        self.y_local = y_local # (n_loc,)  local labels
         self.node_id = node_id
         self.alphas = alphas
 
@@ -59,8 +40,7 @@ class MatrixSummaryFeatures(BaseEstimator, TransformerMixin):
         return np.array([np.mean(np.diag(np.roll(A, -s, axis=1))) for s in range(C)]) # (C,)
 
     def transform(self, X):
-        """X : (m, d, C) stacked intermediate models of the m in-neighbours."""
-        m, d, C = X.shape
+        m, d, C = X.shape # stacked int models of the m neighbours
         eps = 1e-12
  
         th_i = self.theta_ref
@@ -70,28 +50,21 @@ class MatrixSummaryFeatures(BaseEstimator, TransformerMixin):
         alpha_k = float(self.alphas[self.iter])
         K = len(self.alphas)
 
-        Xf = X.reshape(m, -1)                      # (m, D) flattened neighbour models
-        D3 = th_i[None, ...] - X                   # (m, d, C) raw disagreement
-        D = D3.reshape(m, -1)                      # (m, D)
+        Xf = X.reshape(m, -1) # (m, D) flattened neighbour models
+        D3 = th_i[None, ...] - X # (m, d, C) raw disagreement
+        D = D3.reshape(m, -1) # (m, D)
         Dn = np.linalg.norm(D, axis=1)
 
-        # ------------------------------------------------------------------
-        # Block 1: x_i-relative features
-        # ------------------------------------------------------------------
-        # cos_g is invariant to positive rescaling of D, so dividing by alpha_k
-        # would not change it; the alpha_k division only ever mattered for the
-        # norm feature, where it is applied explicitly below.
+        # Features relative to models[i]
         cos_g = (D @ gi) / (Dn * gn + eps)
 
-        # Expressed in units of "one gradient step", so the feature is
-        # comparable across iterations with different alpha_k.
         log_norm_ratio = np.log(Dn / (alpha_k * gn) + eps)
  
-        sv = np.linalg.svd(D3, compute_uv=False)            # (m, min(d,C))
+        sv = np.linalg.svd(D3, compute_uv=False)
         stable_rank = (sv ** 2).sum(axis=1) / (sv[:, 0] ** 2 + eps)
 
-        M = (Xl.T @ np.eye(C)[yl]) / len(yl)                # (d, C) class-mean matrix
-        sig = np.array([self._shift_scores(M, D3[j]) for j in range(m)])   # (m, C)
+        M = (Xl.T @ np.eye(C)[yl]) / len(yl)
+        sig = np.array([self._shift_scores(M, D3[j]) for j in range(m)])
         margin = sig.max(axis=1) - sig[:, 0]
         shift_off_diag = (sig.argmax(axis=1) != 0).astype(float)
         sig_pos = np.clip(sig, 0.0, None)
@@ -113,9 +86,7 @@ class MatrixSummaryFeatures(BaseEstimator, TransformerMixin):
             acc[j] = (pred_j == yl).mean()
         ce_diff = ce_abs - ce_i
 
-        # ------------------------------------------------------------------
-        # Block 2: leave-one-out neighbourhood-relative features
-        # ------------------------------------------------------------------
+        # Leave-one-out neighbourhood-relative features
         if m >= 3:
             dev = np.empty_like(Xf)  # (m,D)
             scl = np.empty_like(Xf)  # (m,D)
@@ -133,22 +104,14 @@ class MatrixSummaryFeatures(BaseEstimator, TransformerMixin):
 
             dn = np.linalg.norm(dev, axis=1)
  
-            # Honest: x_j - med ~ mixing noise, so cos ~ 0.
-            # Sign-flip: x_j - med ~ 2 alpha_k g, so cos ~ +1.
-            # The shared consensus offset cancels because the median carries it,
-            # and alpha_k scales numerator and denominator alike.
             cos_dev_g = (dev @ gi) / (dn * gn + eps)
             log_dev_norm = np.log(dn / (np.median(dn) + eps) + eps)
             cos_dev_scale = ((dev * scl).sum(1) / (dn * np.linalg.norm(scl, axis=1) + eps))   # ALIE ~ -1
             cos_gbar = ((D * gbar).sum(1) / (Dn * np.linalg.norm(gbar, axis=1) + eps))        # IPM ~ -1
  
-            # Semantic label-flip signal, referenced to the neighbourhood rather
-            # than to node i, for the same cancellation reason.
             ce_diff_nbr = ce_abs - ce_med
             acc_dev = acc - acc_med
         else:
-            # Too few messages for a leave-one-out reference: emit the honest
-            # null value rather than something the classifier can act on.
             zeros = np.zeros(m)
             cos_dev_g = zeros
             log_dev_norm = zeros
@@ -157,9 +120,7 @@ class MatrixSummaryFeatures(BaseEstimator, TransformerMixin):
             ce_diff_nbr = zeros
             acc_dev = zeros
 
-        # ------------------------------------------------------------------
-        # Block 3: context
-        # ------------------------------------------------------------------
+        # Context Features
         log_alpha = np.full(m, np.log(alpha_k + eps))
         k_frac = np.full(m, self.iter / max(K - 1, 1))
  

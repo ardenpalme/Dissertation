@@ -2,21 +2,23 @@ import os
 import threading
 import numpy as np
 import pandas as pd
-from scipy.special import log_softmax 
+from scipy.special import log_softmax
 
 from utils import parse_results, rng, sgd_grad, proj_tau, dirichlet_partition, get_alphas
 from metrics import MetricsCalculator, effective_mixing
 from preprocessor import MatrixSummaryFeatures
 from dist_alg import aggregate, byz_atk
+from config import LOGFILE
 
 class SystemSimulator():
-    def __init__(self, config, global_dataset, rng, log_fname):
+    def __init__(self, config, global_dataset, gf):
         self.num_nodes = config['sys']['num_nodes']
         self.b = config['sys']['b']
         self.K = config['sys']['K']
         self.batch_sz = config['batch_sz']
-        self.rng = rng
-        self.log_fname = log_fname
+
+        self.gf = gf
+        self.mc = MetricsCalculator(config, global_dataset, rng)
 
         self.X_train = global_dataset['X_train']
         self.y_train = global_dataset['y_train']
@@ -27,15 +29,12 @@ class SystemSimulator():
         self.reg_param = config['reg_param']
         self.print_freq = self.K // 4
 
-        self.mc = MetricsCalculator(config, global_dataset, rng)
-        self.config = config
 
-    def configure(self, gf, config, proj_const, pre_pipe, best_est, params_C, is_printing_logs=True, taus=None):
+    def init_simulation(self, config, proj_const, pre_pipe, best_est, params_C, seed, is_printing_logs=True, taus=None):
+        self.rng = rng(seed)
         self.dp = dirichlet_partition(self.y_train, self.num_nodes, config['data_heterogeneity'], self.rng)
-        self.G, self.W, sampling_subset = gf.create_graph(config['graph_type'], config['graph_weights'], **config['graph_args'])
-        self.B = self.rng.choice(sampling_subset, size=self.b, replace=False)
-        self.H = np.array(list(set(np.arange(self.num_nodes)) - set(self.B)))
-        _, self.pi, _ = effective_mixing(self.W, self.H, params_C['C_fpr'])
+        self.G, self.W, self.B, self.H = self.gf.create_graph(config['graph_type'], config['graph_weights'], seed, **config['graph_args'])
+        self.Wbar, self.pi, self.lam_pi = effective_mixing(self.W, self.H, params_C['C_fpr'])
         self.alphas = get_alphas(self.K, config)
         self.proj_const = proj_const
         self.pre_pipe = pre_pipe
@@ -43,8 +42,7 @@ class SystemSimulator():
         self.params_C = params_C
         self.is_printing_logs = is_printing_logs
 
-        if(taus is None): self.taus = self.proj_const * self.alphas
-        else: self.taus = taus
+        self.taus = taus if taus is not None else (self.proj_const * self.alphas)
 
         # Shared Objects
         self.tar_node = self.rng.choice(self.H)
@@ -69,20 +67,34 @@ class SystemSimulator():
         return F_Si_arr.mean(), np.average(F_Si_arr, weights=pi)
 
     def get_metrics_summary(self, models):
+        h = len(self.H)
         Xh = models[self.H]
-        D = Xh - np.tensordot(self.pi, Xh, axes=1)
+        Pi = np.eye(h) - np.outer(np.ones(h),self.pi)
+        X_perp = np.tensordot(Pi, Xh, axes=(1, 0))
+        unif_dist=np.full(h,1/h)
+
         return {
-            'test_acc':      ((self.X_test @ Xh.mean(axis=0)).argmax(1) == self.y_test).mean(),
-            'test_acc_pi':   ((self.X_test @ np.tensordot(self.pi, Xh, axes=1)).argmax(1) == self.y_test).mean(),
-            'Ck':            float(self.pi @ (D**2).sum(axis=(1, 2))),
-            'mean_test_acc': self.test_acc_arr[self.H].mean(),
-            'min_test_acc':  self.test_acc_arr[self.H].min(),
-            'max_test_acc':  self.test_acc_arr[self.H].max(),
+            'test_acc':       ((self.X_test @ Xh.mean(axis=0)).argmax(1) == self.y_test).mean(),
+            'test_acc_pi':    ((self.X_test @ np.tensordot(self.pi, Xh, axes=1)).argmax(1) == self.y_test).mean(),
+            'C_pi':           np.einsum('ijk,i->', X_perp**2, self.pi),
+            'C_unif' :        np.einsum('ijk,i->', X_perp**2, unif_dist),
+            'mean_test_acc':  self.test_acc_arr[self.H].mean(),
+            'min_test_acc':   self.test_acc_arr[self.H].min(),
+            'max_test_acc':   self.test_acc_arr[self.H].max(),
             'min_train_loss': self.train_loss_arr[self.H].min(),
             'max_train_loss': self.train_loss_arr[self.H].max(),
         }
 
-    def calc_reduced_local_metrics(self, i, models): # RDSGD_ORACLE and Aggregators
+    def calc_realized_fpr_fnr(self,k):
+        eps = 10**(-12)
+        E = self.edge_log[self.H]
+        tp, fp, tn, fn = E[:,k, 0], E[:,k,1], E[:,k,2], E[:,k,3]
+        gamma_k = fp.sum() / (fp.sum() + tn.sum() + eps)
+        beta_k = fn.sum() / (fn.sum() + tp.sum() + eps)
+        byz_w_k = E[:,k,7] @ self.pi
+        return dict(gamma_k=gamma_k, beta_k=beta_k, byz_w_k=byz_w_k)
+
+    def calc_reduced_local_metrics(self, i, models): # ORACLE and Aggregators
         Xl, yl = self.X_train[self.dp[i]], self.y_train[self.dp[i]]
 
         # test_acc_k
@@ -104,9 +116,9 @@ class SystemSimulator():
         # fpr_k and fnr_k 
         tp, fp = flagged & is_byz,  flagged & ~is_byz
         tn, fn = ~flagged & ~is_byz, ~flagged & is_byz
-        self.edge_log[i, k] = [tp.sum(), fp.sum(), tn.sum(), fn.sum(), 
-                          self.W[i, nbors][tp].sum(), self.W[i, nbors][fp].sum(), 
-                          self.W[i, nbors][tn].sum(), self.W[i, nbors][fn].sum()]
+        self.edge_log[i, k] = [tp.sum(), fp.sum(), tn.sum(), fn.sum(),
+                               self.W[i, nbors][tp].sum(), self.W[i, nbors][fp].sum(), 
+                               self.W[i, nbors][tn].sum(), self.W[i, nbors][fn].sum()]
         self.score_log[i, k, :len(nbors)] = probs
         self.byz_log[i, k, :len(nbors)] = is_byz
 
@@ -115,14 +127,15 @@ class SystemSimulator():
         nbors = np.array(list(self.G.neighbors(i)))
         byz_nbors = np.isin(nbors, self.B)
         hon_nbors = np.isin(nbors, self.H)
+        is_byz = np.isin(nbors, self.B)
 
         for k in range(self.K):
             _, g = sgd_grad(Xl, yl, models[i], self.reg_param, self.batch_sz, rng)
             int_models[i] = models[i] - alphas[k] * g
             barrier.wait() # all intermediate models (x^{k+1/2}) written
             
-            flagged = np.where((byz_nbors & (rng.random(len(nbors)) < (1-self.params_C['C_fnr']))) | \
-                    (hon_nbors & (rng.random(len(nbors)) < self.params_C['C_fpr'])))
+            flagged = (byz_nbors & (rng.random(len(nbors)) < (1-self.params_C['C_fnr']))) | \
+                    (hon_nbors & (rng.random(len(nbors)) < self.params_C['C_fpr']))
 
             w_row = self.W[i].copy()
             w_row[nbors[flagged]] = 0.0
@@ -132,11 +145,19 @@ class SystemSimulator():
             models[i] = sum(w_row[j] * proj[j] for j in np.append(nbors, i)) 
             barrier.wait() # all models (x^{k+1}) written
 
+            # fpr_k and fnr_k 
+            tp, fp = flagged & is_byz,  flagged & ~is_byz
+            tn, fn = ~flagged & ~is_byz, ~flagged & is_byz
+            self.edge_log[i, k] = [tp.sum(), fp.sum(), tn.sum(), fn.sum(),
+                                   self.W[i, nbors][tp].sum(), self.W[i, nbors][fp].sum(), 
+                                   self.W[i, nbors][tn].sum(), self.W[i, nbors][fn].sum()]
+
             self.calc_reduced_local_metrics(i, models)
             barrier.wait() # all metrics collected by all honest workers
 
             if(i == tar_node):
                 metrics = self.get_metrics_summary(models)
+                metrics.update(self.calc_realized_fpr_fnr(k))
                 if(k % self.print_freq == 0 and k>0 and self.is_printing_logs):
                     print(f"[k={k}] "
                           f"train_loss: [{metrics['min_train_loss']:.3f},{metrics['max_train_loss']:.3f}],"
@@ -168,13 +189,14 @@ class SystemSimulator():
             proj = {j: proj_tau(models[i], int_models[j], self.taus[k]) for j in np.append(nbors, i)}
             models[i] = sum(w_row[j] * proj[j] for j in np.append(nbors, i)) 
             barrier.wait() # all models (x^{k+1}) written
-            
+
             self.calc_full_local_metrics(i, k, models, probs, w_row, proj, x_prev, nbors, flagged, is_byz)
             barrier.wait() # all metrics collected by all honest workers
 
             if(i == tar_node):
                 metrics = self.get_metrics_summary(models)
                 metrics['rho2_k'] = float(self.pi @ self.E_sq[self.H])
+                metrics.update(self.calc_realized_fpr_fnr(k))
                 if(k % self.print_freq == 0 and k>0 and self.is_printing_logs):
                     print(f"[k={k}] "
                           f"train_loss: [{metrics['min_train_loss']:.3f},{metrics['max_train_loss']:.3f}],"
@@ -238,9 +260,9 @@ class SystemSimulator():
                                          args=(i, barrier,  models, int_models, tar_node, tar_metrics['DSGD'],
                                                self.alphas, rng('sys','sgd', seed, i))) 
                         for i in node_ids]
-            elif(alg == 'RDSGD_ORACLE'):
+            elif(alg == 'ORACLE'):
                 return [threading.Thread(target=self.worker_RDSGD_oracle, 
-                                         args=(i, barrier, models, int_models, tar_node, tar_metrics['RDSGD_ORACLE'],
+                                         args=(i, barrier, models, int_models, tar_node, tar_metrics['ORACLE'],
                                                self.alphas, rng('sys','sgd', seed, i)))
                         for i in node_ids]
 
@@ -259,7 +281,7 @@ class SystemSimulator():
         else: return []
 
 
-    def simulate(self, sim_params, run_results):
+    def simulate(self, sim_params):
         algorithms = sim_params['algorithms']
         atk_type = sim_params['atk_type']
         threat_model = sim_params['threat_model']
@@ -273,7 +295,7 @@ class SystemSimulator():
                 threads = self.create_threads(('hon', alg, np.arange(self.num_nodes)), 
                                               self.barrier, self.models, self.int_models, tar_metrics, self.tar_node, seed)
                 if self.is_printing_logs:
-                    print(alg.center(len("=" * 25), '='))
+                    print(alg.center(len("=" * 56), '='))
 
                 for t in threads:
                     t.start()
@@ -292,7 +314,7 @@ class SystemSimulator():
                 threads = hon_threads + byz_threads 
 
                 if self.is_printing_logs:
-                    print(alg.center(len("=" * 25), '='))
+                    print(alg.center(len("=" * 56), '='))
 
                 for t in threads:
                     t.start()
@@ -304,16 +326,14 @@ class SystemSimulator():
             names=["alg", "k"],
         )
 
-        for alg in algorithms:
-            run_results[f'{threat_model}_{alg}'] = dict(test_acc=df.loc[alg]['test_acc'].iloc[-1])
-
         return df
 
-    def log_results(self, res, run_dir, run_id):
+    def log_results(self, config, res, run_dir, run_id, logfile=None):
         sim_config = (self.W, self.H, self.B, self.dp, self.pi)
-        file_path = os.path.join(run_dir, "results.csv")
+        log_fname = logfile if logfile is not None else LOGFILE 
+        file_path = os.path.join(run_dir, log_fname)
 
-        data = self.config.copy()
+        data = config.copy()
         data.update(res)
         data.update(self.mc(sim_config, self.models, self.params_C['C_fpr'], self.params_C['C_fnr'], self.proj_const))
         payload = parse_results(data)
@@ -331,6 +351,4 @@ class SystemSimulator():
 
         return payload
 
-    def get_network_topology(self):
-        return self.G, self.B
 

@@ -1,23 +1,12 @@
 import networkx as nx
 import numpy as np
 
+from utils import rng
+
 class GraphFactory():
-    def __init__(self, num_nodes, b, seed):
+    def __init__(self, num_nodes, b):
         self.num_nodes = num_nodes
         self.b = b
-        self.seed = seed 
-
-    @staticmethod
-    def calc_unif_weights(G):
-        n = G.number_of_nodes()
-        W = np.zeros((n, n))
-        for i in range(n):
-            nbrs = [j for j in G.adj[i] if j != i]
-            w = 1 / (1 + len(nbrs))
-            for j in nbrs:
-                W[i, j] = w
-            W[i, i] = w
-        return W
 
     @staticmethod
     def calc_MH_weights(G):
@@ -47,56 +36,14 @@ class GraphFactory():
         return W
 
     @staticmethod
-    def calc_srw_weights(G):
-        n = G.number_of_nodes()
-        W = np.zeros((n, n))
-        for i in range(n):
-            deg = G.degree(i)
-            if deg == 0:
-                W[i, i] = 1.0
-            else:
-                for j in G.adj[i]:
-                    W[i, j] = 1.0 / deg
-        return W
-
-    def calc_lazy_srw_weights(self, G):
-        n = G.number_of_nodes()
-        W = self.calc_srw_weights(G)
-        return 0.5 * np.eye(n) + 0.5 * W
-
-    @staticmethod
-    def calc_pagerank_weights(G, alpha=0.85): #TODO should be kwarg
-        n = G.number_of_nodes()
-        A = nx.adjacency_matrix(G).todense()
-        D_inv = np.diag(1 / np.array([G.degree(i) for i in range(n)], dtype=float))
-        P_rw = D_inv @ A
-        v = np.ones((n, 1)) / n  # Uniform teleportation
-        P_pr = alpha * P_rw + (1 - alpha) * (np.ones((n, 1)) @ v.T)
-        return P_pr
-
-    @staticmethod
-    def calc_random_row_stochastic(G, seed=42): #TODO should be related to global seed
-        n = G.number_of_nodes()
-        np.random.seed(seed)
-        W = np.random.rand(n, n) + 0.1
-        for i in range(n):
-            for j in range(n):
-                if i == j or j not in G.adj[i]:
-                    W[i, j] = 0.0
-        row_sums = W.sum(axis=1, keepdims=True)
-        row_sums[row_sums == 0] = 1.0 
-        W = W / row_sums
-        return W
-
-    @staticmethod
-    def sample_until(gen, b, max_attempts=1000):
+    def sample_until(gen, H, max_attempts=1000):
         for t in range(max_attempts):
             g = gen(t)
-            if nx.node_connectivity(g) >= b + 1:
+            if nx.is_connected(g.subgraph(H)):
                 return g
         return None
 
-    def create_graph(self, gtype, weights, **kwargs):
+    def create_graph(self, gtype, weights, seed, **kwargs):
         ''' 
         Watts-Strogatz:  If p is too low, graph is a ring
         Barabási-Albert: If m is too low, graph might have articulation points
@@ -104,15 +51,18 @@ class GraphFactory():
         Erdos-Renyi: p = min(1.0, 3.0 * np.log(n) / n)
         Barbell: m1 = (n-2) // 2
         '''
+        loc_rng = rng(seed)
+        B = loc_rng.choice(np.arange(self.num_nodes), size=self.b, replace=False)
+        H = np.array(list(set(np.arange(self.num_nodes)) - set(B)))
         G, W = None, None
-        subset = np.arange(self.num_nodes)
+
         match gtype:
             case "random-regular":
-                G = self.sample_until(lambda t: nx.random_regular_graph(kwargs['rand_reg_deg'], self.num_nodes, seed=self.seed + t), self.b)
+                G = self.sample_until(lambda t: nx.random_regular_graph(kwargs['rand_reg_deg'], 
+                                                                        self.num_nodes, seed=seed + t), H)
                   
             case "erdos-renyi":
-                # p = min(1.0, 3.0 * np.log(self.num_nodes) / self.num_nodes)
-                G = self.sample_until(lambda t: nx.gnp_random_graph(self.num_nodes, kwargs['er_p'], seed=self.seed + t), self.b)
+                G = self.sample_until(lambda t: nx.gnp_random_graph(self.num_nodes, kwargs['er_p'], seed=seed + t), H)
                 
             case "complete":
                 G = nx.complete_graph(self.num_nodes)
@@ -124,67 +74,32 @@ class GraphFactory():
                     self.num_nodes, 
                     kwargs['ws_k'], 
                     kwargs['ws_p'],
-                    seed=self.seed + t), self.b)
+                    seed=seed + t), H)
 
             case "barabasi-albert":
                 G = self.sample_until(lambda t: nx.barabasi_albert_graph(
                     self.num_nodes, 
-                    kwargs['ba_m'], # number of edges to attach from a new node to existing nodes
-                    seed=self.seed + t), self.b)
-
-            case "barbell":
-                #assert self.b==1, "connectivity is min(m1, m2) = 2, must have b<=1"
-                G = nx.barbell_graph(kwargs['barbell_m1'], kwargs['barbell_m2'])
-                bridge_nodes = [i for i in range(self.num_nodes) if G.degree(i) == 2]
-                neighbors_of_bridge = set()
-                for i in bridge_nodes:
-                    neighbors_of_bridge.update(G.neighbors(i))
-                subset = np.array(list(set(range(self.num_nodes)) - (set(bridge_nodes) | neighbors_of_bridge)))
+                    kwargs['ba_m'], 
+                    seed=seed + t), H)
 
             case "geometric":
                 G = self.sample_until(lambda t: nx.random_geometric_graph(
                     self.num_nodes, 
                     kwargs['geom_radius'], 
-                    seed=self.seed + t), self.b)
-
-            case "torus_2d":
-                assert self.b<=3, "2D torus has vertex-connectivity 4"
-                side = int(np.sqrt(self.num_nodes))
-                if side**2 != self.num_nodes:
-                    raise ValueError("self.num_nodes must be a perfect square for 2D torus.")
-                G = nx.grid_2d_graph(side, side, periodic=True)
-                G = nx.convert_node_labels_to_integers(G)
-
-            case "hypercube":
-                k = int(np.log2(self.num_nodes))
-                if 2**k != self.num_nodes:
-                    raise ValueError("self.num_nodes must be a power of 2 for hypercube.")
-                if k <= self.b:
-                    raise ValueError(f"Hypercube dimension {k} is not > b={self.b}. Connectivity too low.")
-                G = nx.hypercube_graph(k)
+                    seed=seed + t), H)
 
         if G == None:
-            raise ValueError(f"Could not generate a {gtype} graph with κ(G)>{self.b}")
+            raise ValueError(f"Could not generate a graph with connected honest subgraph")
 
         match weights:
             case "MH":
                 W = self.calc_MH_weights(G)
             case "MH_gen":
                 W = self.calc_generalized_MH_weights(G, kwargs['MH_target_pi'])
-            case "unif":
-                W = self.calc_unif_weights(G)
-            case "SRW":
-                W = self.calc_srw_weights(G)
-            case "lazy_SRW":
-                W = self.calc_lazy_srw_weights(G)
-            case "pagerank":
-                W = self.calc_pagerank_weights(G)
-            case "rand_row_stoch":
-                W = self.calc_random_row_stochastic(G)
             
-        return G, W, subset
+        return G, W, B, H
 
-def calc_graph_metrics(G,W,b):
+def calc_graph_metrics(W,b):
     n = W.shape[0]
     
     L = -W.copy()
@@ -198,7 +113,7 @@ def calc_graph_metrics(G,W,b):
     return {'mu2' : mu2, 'D_b' : D_b, 'spectral_gap': spectral_gap}
 
 def add_graph_plot(G, B, axis):
-    pos = nx.kamada_kawai_layout(G) # nx.spring_layout(G)
+    pos = nx.kamada_kawai_layout(G)
     colors = ['red' if n in set(B) else 'lightblue' for n in G.nodes()]
     nx.draw(G, pos, node_color=colors, with_labels=True, ax=axis)
 

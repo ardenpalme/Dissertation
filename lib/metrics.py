@@ -1,6 +1,6 @@
 import numpy as np
 import scipy.linalg as sla
-from scipy.special import softmax, log_softmax 
+from scipy.special import softmax 
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss
 
@@ -44,14 +44,13 @@ class MetricsCalculator():
         self.rng = rng
 
     @staticmethod
-    def calc_local_opt(X_H, y_H, H, pi, dp, reg_param, rng):
+    def calc_local_opt(X_H, y_H, H, pi, dp, reg_param):
         lr_args = dict(
             solver='lbfgs',
             l1_ratio=0,
             C=1/reg_param,
             fit_intercept=False, 
             max_iter=1000,
-            random_state=np.random.RandomState(rng.integers(1_000_000))
         )
         
         pi_sample_weights = []
@@ -148,10 +147,12 @@ class MetricsCalculator():
         nu2, upper_bound = self.nu2_pi_tot(self.W, self.H, self.pi, gamma_C)
         L, mu = self.calc_L_mu(models[self.H], self.X_shards, self.reg_param)
 
-        local_opt_res = self.calc_local_opt(self.X_H, self.y_H, self.H, self.pi, self.dp, self.reg_param, self.rng)
+        local_opt_res = self.calc_local_opt(self.X_H, self.y_H, self.H, self.pi, self.dp, self.reg_param)
         x_opt = local_opt_res['x_star']
+        x_pi_opt = local_opt_res['x_pi_star']
+
         zeta_sq = self.calc_zeta_sq(x_opt, self.X_train, self.y_train, self.dp, self.H, self.C)
-        zeta_sq_pi = self.calc_zeta_sq_pi(x_opt, self.X_train, self.y_train, self.dp, self.H, self.pi, self.C)
+        zeta_sq_pi = self.calc_zeta_sq_pi(x_pi_opt, self.X_train, self.y_train, self.dp, self.H, self.pi, self.C)
         sigma_sq = self.calc_sigma_sq(x_opt, self.X_train, self.y_train, self.dp, self.H, self.C)
         
         s2 = lam_pi ** 2 + nu2

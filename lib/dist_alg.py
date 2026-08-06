@@ -63,11 +63,11 @@ def byz_atk(i, barrier, models, int_models, X_train, y_train, dp,
             else: alie_z = kwargs['alie_z']
             ipm_eps = kwargs['ipm_eps']
             
-            prev_msgs = None   # (|hon_nbors|, d+1, C) honest messages at k-1
-            prev_grads = None  # (|hon_nbors|, d+1, C) honest pseudo-grads at k-1
+            prev_msgs = None
+            pseudo_grads = None
 
             for k in range(K):
-                if prev_msgs is None or prev_grads is None:
+                if prev_msgs is None or pseudo_grads is None:
                     _, g = sgd_grad(Xl, yl, models[i], reg_param, batch_sz, rng)
                     int_models[i] = models[i] - alphas[k] * g
  
@@ -75,17 +75,17 @@ def byz_atk(i, barrier, models, int_models, X_train, y_train, dp,
                     int_models[i] = prev_msgs.mean(axis=0) - alie_z * prev_msgs.std(axis=0)
  
                 elif atk_type == 'IPM':  
-                    int_models[i] = models[i] + ipm_eps * alphas[k] * prev_grads.mean(axis=0)
+                    int_models[i] = models[i] + ipm_eps * alphas[k] * pseudo_grads.mean(axis=0)
 
-                # window (a): `models` still holds x^k for every node
+                # models holds x^k for every node
                 x_hon = models[hon_nbors].copy() if hon_nbors else None
  
                 barrier.wait()
  
-                # window (b): `int_models` holds x^{k+1/2} for every node
+                # int_models x^{k+1/2} for every node
                 if hon_nbors:
                     prev_msgs = int_models[hon_nbors].copy()
-                    prev_grads = (prev_msgs - x_hon) / alphas[k]
+                    pseudo_grads = (x_hon - prev_msgs) / alphas[k]
  
                 models[i] = sum(W[i, j] * int_models[j] for j in nbors + [i])
                 barrier.wait()

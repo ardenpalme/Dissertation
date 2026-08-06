@@ -37,10 +37,10 @@ def global_ce(theta, X, y):
     log_probs = z - np.log(np.exp(z).sum(axis=1, keepdims=True))
     return -log_probs[np.arange(len(y)), y].mean()
 
-def dirichlet_partition(labels, n_clients, alpha, rng): #TODO understand
+def dirichlet_partition(labels, n_clients, alpha, rng): 
     labels = np.asarray(labels)
-    m = len(labels) // n_clients                 # equal shard size
-    room = np.full(n_clients, m)                 # remaining capacity per client
+    m = len(labels) // n_clients
+    room = np.full(n_clients, m)
     client_idx = [[] for _ in range(n_clients)]
 
     for c in np.unique(labels):
@@ -50,10 +50,10 @@ def dirichlet_partition(labels, n_clients, alpha, rng): #TODO understand
 
         pos = 0
         while pos < len(idx_c) and room.sum() > 0:
-            p = w * (room > 0)                   # only clients with space left
+            p = w * (room > 0)
             p = p / p.sum() if p.sum() else (room > 0) / (room > 0).sum()
             take = np.minimum(rng.multinomial(len(idx_c) - pos, p), room)
-            if take.sum() == 0:                  # all mass landed on full clients
+            if take.sum() == 0:
                 take = np.zeros(n_clients, int)
                 take[rng.choice(n_clients, p=p)] = 1
             for i in np.flatnonzero(take):
@@ -78,7 +78,7 @@ def parse_results(data):
     row['b'] = data['sys']['b']
     row['atk_type'] = row['sys']['atk_type']
     row['train_atks'] = set(row['train']['train_atks'])
-    row['val_atks'] = set(row['train']['val_atks'])
+    row['test_atks'] = set(row['train']['test_atks'])
     
     del row['sys']
     del row['train']

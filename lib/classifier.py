@@ -22,13 +22,12 @@ from xgboost import XGBClassifier
 from sklearn.ensemble import RandomForestClassifier
 
 class ByzClassifier():
-    def __init__(self, config, global_dataset, gf, rng):
+    def __init__(self, config, global_dataset, gf):
         self.num_nodes = config['train']['num_nodes']
         self.b = config['train']['b']
         self.K = config['train']['K']
         self.batch_sz = config['batch_sz']
         self.iter_sample_sz = self.K // 2
-        self.rng = rng
         self.gf = gf
 
         self.X = global_dataset['X_train']
@@ -36,17 +35,18 @@ class ByzClassifier():
         self.C = global_dataset['num_classes']
 
         self.reg_param = config['reg_param']
-        self.sim_beta_C = config['train']['beta_C']
-        self.sim_gamma_C = config['train']['gamma_C']
+        self.beta_C = config['train']['beta_C']
+        self.gamma_C = config['train']['gamma_C']
         self.training_attacks = config['train']['train_atks']
-        self.testing_attacks = config['train']['val_atks']
+        self.testing_attacks = config['train']['test_atks']
+        self.clf_model = config['train']['clf_model']
 
-    def init_simulation(self, config, proj_const):
+    def init_simulation(self, config, proj_const, seed):
+        self.rng = rng(seed)
         self.sampled_iters = self.rng.choice(self.K, size=self.iter_sample_sz, replace=False)
         self.dp = dirichlet_partition(self.y, self.num_nodes, config['data_heterogeneity'], self.rng)
-        self.G, self.W, sampling_subset = self.gf.create_graph(config['graph_type'], config['graph_weights'], **config['graph_args'])
-        self.B = self.rng.choice(sampling_subset, size=self.b, replace=False)
-        self.H = np.array(list(set(np.arange(self.num_nodes)) - set(self.B)))
+
+        self.G, self.W, self.B, self.H = self.gf.create_graph(config['graph_type'], config['graph_weights'], seed, **config['graph_args'])
         self.alphas = get_alphas(self.K, config)
         self.taus = proj_const * self.alphas
 
@@ -57,12 +57,6 @@ class ByzClassifier():
         self.tar_node = self.rng.choice(self.H)
 
     def init_preproc(self):
-        """Column transformer over the canonical feature ordering.
- 
-        Names and heavy/bounded membership are derived from preprocessor.py so
-        they cannot drift out of sync with transform().  Note ColumnTransformer
-        emits the robust block first, so out_feat_names is reordered to match.
-        """
         idx = {n: i for i, n in enumerate(FEATURE_NAMES)}
         heavy = [idx[n] for n in HEAVY_FEATURES]
         bounded = [idx[n] for n in FEATURE_NAMES if idx[n] not in heavy]
@@ -75,8 +69,8 @@ class ByzClassifier():
                                + [FEATURE_NAMES[i] for i in bounded])
 
 
-    def worker_RDSGD(self, i, tar_node, barrier, models, int_models, alphas, taus,
-                         results, rng, beta_C=0.1, gamma_C=0.1):
+    def worker_RDSGD(self, i, barrier, models, int_models, alphas, taus,
+                         results, beta_C, gamma_C, rng):
 
         Xl, yl = self.X[self.dp[i]], self.y[self.dp[i]]
         feat = MatrixSummaryFeatures(i, Xl, yl, alphas)
@@ -108,23 +102,22 @@ class ByzClassifier():
 
         results[i] = (np.concatenate(feats), np.array(labels), np.array(groups))
 
-    def simulate(self, atk_type, sim_id, beta_C, gamma_C):
+    def simulate(self, atk_type, seed, beta_C, gamma_C):
         self.models.fill(0)
         self.int_models.fill(0)
         results = [None] * self.num_nodes
         
         hon_threads = [threading.Thread(target=self.worker_RDSGD, 
-                        args=(i, self.tar_node, self.barrier, self.models, self.int_models, self.alphas, self.taus, 
-                              results, rng('classifier', 'hon', sim_id, i)),
-                        kwargs={'beta_C' : beta_C, 'gamma_C' : gamma_C})
+                        args=(i, self.barrier, self.models, self.int_models, self.alphas, self.taus, 
+                              results, beta_C, gamma_C, rng('classifier', 'hon', seed, i)))
                        for i in self.H]
 
         byz_threads = [threading.Thread(target=byz_atk, 
                         args=(i, self.barrier, self.models, self.int_models, self.X, self.y, self.dp, 
                               self.C, self.K, self.W, self.G, self.H,
-                              self.reg_param, self.batch_sz, self.alphas, atk_type, rng('classifier', 'byz', sim_id, i)),
-                                        kwargs={'alie_z': None, 'num_nodes':self.num_nodes, 'b': self.b,
-                                                'ipm_eps':0.5})
+                              self.reg_param, self.batch_sz, self.alphas, atk_type, rng('classifier', 'byz', seed, i)),
+                                        # TODO make ALIE, IPM args a global config param
+                                        kwargs={'alie_z': None, 'num_nodes':self.num_nodes, 'b': self.b, 'ipm_eps':0.5}) 
                        for i in self.B]
         
         threads = hon_threads + byz_threads
@@ -138,38 +131,49 @@ class ByzClassifier():
         g_C = np.concatenate([results[i][2] for i in self.H])
         return X_C, y_C, g_C
 
-    def _gather(self, attacks, sim_id, beta_C=None, gamma_C=None):
+    def _gather(self, attacks, seed, beta_C, gamma_C):
         Xs, ys, gs, atks = [], [], [], []
-        sim_beta_C = beta_C if beta_C is not None else self.sim_beta_C
-        sim_gamma_C = gamma_C if beta_C is not None else self.sim_gamma_C
 
         for a_idx, atk in enumerate(attacks):
-            X_C, y_C, g_C = self.simulate(atk, sim_id, sim_beta_C, sim_gamma_C)
+            X_C, y_C, g_C = self.simulate(atk, seed, beta_C, gamma_C)
             Xs.append(X_C)
             ys.append(y_C)
-            gs.append(g_C + 1000 * a_idx)          # keep attacks in distinct groups
+            gs.append(g_C + 1000 * a_idx) # keep attacks in distinct groups
             atks.append(np.full(len(y_C), a_idx))
         return (np.concatenate(Xs), np.concatenate(ys),
                 np.concatenate(gs), np.concatenate(atks))
 
-    def run_simulations(self, config, proj_const, sim_seed, beta_C=0.1, gamma_C=0.05, is_printing=True):
+    def run_simulations(self, config, proj_const, sim_seed, 
+                        training_attacks=None, testing_attacks=None,
+                        beta=None, gamma=None, is_printing=True):
         train_sim_seed = sim_seed * 17 + 23
         val_sim_seed = sim_seed * 11 + 1
+        thr_sim_seed = sim_seed * 617 + 37
         test_sim_seed = sim_seed * 217 + 31
 
+        beta_C = beta if beta is not None else self.beta_C
+        gamma_C = gamma if gamma is not None else self.gamma_C
+
+        train_atks = training_attacks if training_attacks is not None else self.training_attacks 
+        test_atks = testing_attacks if testing_attacks is not None else self.testing_attacks
+
         if is_printing:
-            print(f"Simulating {self.training_attacks}(beta={beta_C}, gamma={gamma_C})")
-            print(f'  train set (sim {train_sim_seed})')
-        self.init_simulation(config, proj_const)
-        Xtr, ytr, gtr, atr = self._gather(self.training_attacks, train_sim_seed, beta_C, gamma_C)
+            print(f"Simulating RDSGD @ (beta_C={beta_C}, gamma_C={gamma_C})")
+            print(f'Building training set. Simulating {train_atks} (seed {train_sim_seed})')
+        self.init_simulation(config, proj_const, train_sim_seed)
+        Xtr, ytr, gtr, atr = self._gather(train_atks, train_sim_seed, beta_C, gamma_C)
  
-        if is_printing: print(f'  validation set (sim {val_sim_seed})')
-        self.init_simulation(config, proj_const)
-        Xva, yva, gva, ava = self._gather(self.training_attacks, val_sim_seed, beta_C, gamma_C)
+        if is_printing: print(f'Building validation set I. Simulating {train_atks} (seed {val_sim_seed})')
+        self.init_simulation(config, proj_const, val_sim_seed)
+        Xva, yva, gva, ava = self._gather(train_atks, val_sim_seed, beta_C, gamma_C)
+
+        if is_printing: print(f'Building validation set II. Simulating {train_atks} (seed {thr_sim_seed})')
+        self.init_simulation(config, proj_const, thr_sim_seed)
+        Xth, yth, gth, ath = self._gather(train_atks, thr_sim_seed, beta_C, gamma_C)
  
-        if is_printing: print(f'  test set (sim {test_sim_seed})')
-        self.init_simulation(config, proj_const)
-        Xte, yte, gte, ate = self._gather(self.testing_attacks, test_sim_seed, beta_C, gamma_C)
+        if is_printing: print(f'Building test set. Simulating {test_atks} (seed {test_sim_seed})')
+        self.init_simulation(config, proj_const, test_sim_seed)
+        Xte, yte, gte, ate = self._gather(test_atks, test_sim_seed, beta_C, gamma_C)
         
         self.init_preproc()
         self.data = dict(
@@ -177,19 +181,19 @@ class ByzClassifier():
             groups_train=gtr, atk_train=atr,
             X_val=self.feat_pre_proc.transform(Xva), y_val=yva,
             groups_val=gva, atk_val=ava,
+            X_thr=self.feat_pre_proc.transform(Xth), y_thr=yth,
+            groups_thr=gth, atk_thr=ath,
             X_test=self.feat_pre_proc.transform(Xte), y_test=yte,
             groups_test=gte, atk_test=ate,
-            attack_names=list(self.training_attacks),
-            test_attack_names=list(self.testing_attacks))
+            attack_names=list(train_atks),
+            test_attack_names=list(test_atks))
         return self.data
 
-    def train_and_eval(self, in_data=None, model='lin-lr'):
+    def fit(self, in_data=None, in_model=None):
         data = in_data if in_data is not None else self.data
         X_train, y_train, g_train = data['X_train'], data['y_train'], data['groups_train']
+        model = in_model if in_model is not None else self.clf_model
 
-        # Group-aware folds: rows from one node share that node's local shard,
-        # which ce_diff / acc / margin are computed against, so shuffled folds
-        # leak and inflate the CV score.
         n_groups = len(np.unique(g_train))
         cv = GroupKFold(n_splits=min(5, n_groups))
         splits = list(cv.split(X_train, y_train, g_train))
@@ -241,36 +245,38 @@ class ByzClassifier():
 
         return self.best_est, self.feat_pre_proc
  
-    def calc_optimal_op_pt(self, in_data=None, quantile=0.8):
+    def calc_optimal_op_pt(self, in_data=None, criterion='cost', prevalence=None, cost_fp=1.0, cost_fn=3.0):
         data = in_data if in_data is not None else self.data
+        y = data['y_thr']
+        p = self.best_est.predict_proba(data['X_thr'])[:, 1]
+        self.fpr, self.tpr, thr = roc_curve(y, p)
 
-        # Operating point from the held-out validation simulation.
-        p_val = self.best_est.predict_proba(data['X_val'])[:, 1]
-        fpr, tpr, thr = roc_curve(data['y_val'], p_val)
-        idx = int(np.clip(np.searchsorted(tpr, quantile, side='left'), 0, len(thr) - 1))
-        self.opt_fpr = float(fpr[idx])
-        self.opt_fnr = float(1 - tpr[idx])
-        self.opt_tau = float(thr[idx])
+        if criterion == 'cost':
+            pi = float(y.mean()) if prevalence is None else prevalence
+            cost = pi * cost_fn * (1 - self.tpr) + (1 - pi) * cost_fp * self.fpr
+            idx = int(np.argmin(cost))
+        else: # Youden criterion
+            idx = int(np.argmax(self.tpr - self.fpr))
+
+        self.opt_fpr = float(self.fpr[idx])
+        self.opt_tpr = float(self.tpr[idx])
+        self.opt_fnr = float(1 - self.tpr[idx])
+        self.opt_tau = float(np.clip(thr[idx], 0.0, 1.0))
  
         return {'C_fpr': self.opt_fpr, 'C_fnr': self.opt_fnr,
                 'C_tau': self.opt_tau, 'cv_ap': self.cv_score,
                 'cv_params': self.cv_params}
 
-    # ------------------------------------------------------------------
-    # Evaluation
-    # ------------------------------------------------------------------
-    def test(self, X_C=None, y_C=None):
-        d = self.data
-        X_C = d['X_test'] if X_C is None else X_C
-        y_C = d['y_test'] if y_C is None else y_C
+    def test(self, in_data=None):
+        d= in_data if in_data is not None else self.data
+        X_C, y_C = d['X_test'], d['y_test'] 
  
         p = self.best_est.predict_proba(X_C)[:, 1]
-        self.fpr, self.tpr, self.roc_thr = roc_curve(y_C, p)
+        #self.fpr, self.tpr, self.roc_thr = roc_curve(y_C, p)
         self.auc = roc_auc_score(y_C, p)
         self.prec, self.rec, self.pr_thr = precision_recall_curve(y_C, p)
         self.ap = average_precision_score(y_C, p)
         self.prevalence = float(y_C.mean())
- 
         j = int(np.clip(np.searchsorted(self.pr_thr, self.opt_tau), 0, len(self.prec) - 1))
         self.op_prec, self.op_rec = self.prec[j], self.rec[j]
  
@@ -280,71 +286,21 @@ class ByzClassifier():
                 'beta_C': fn / max(fn + tp, 1), 'gamma_C': fp / max(fp + tn, 1),
                 'roc_auc': self.auc, 'avg_prec': self.ap}
 
-    def per_attack_report(self, split='test'):
-        """Recall and FPR per attack at the deployed threshold.
- 
-        Pooled AUC has repeatedly looked healthy while one attack's recall was
-        poor; this is the table that predicts RDSGD's downstream accuracy.
-        """
-        d = self.data
-        X, y, atk = d[f'X_{split}'], d[f'y_{split}'], d[f'atk_{split}']
-        names = (d['test_attack_names'] if split == 'test' else d['attack_names'])
-        p = self.best_est.predict_proba(X)[:, 1]
-        pred = p >= self.opt_tau
- 
-        rows = []
-        for a in np.unique(atk):
-            m = atk == a
-            neg = m & (y == 0)
-            rows.append({
-                'attack': names[a] if a < len(names) else str(a),
-                'n': int(m.sum()),
-                'prevalence': float(y[m].mean()),
-                'recall': float(recall_score(y[m], pred[m], zero_division=0)),
-                'beta_C': float(1 - recall_score(y[m], pred[m], zero_division=0)),
-                'gamma_C': float(pred[neg].mean()) if neg.any() else np.nan,
-                'roc_auc': (float(roc_auc_score(y[m], p[m]))
-                            if len(np.unique(y[m])) > 1 else np.nan)})
-        df = pd.DataFrame(rows).set_index('attack')
-        self.worst_recall = float(df['recall'].min())
-        return df
- 
-    def recall_by_iteration(self, split='test', k_col='k_frac', bins=7):
-        """Recall as a function of training progress.
- 
-        Requires k_frac to survive preprocessing (it does -- it is in the
-        bounded block).  A declining curve is the signature of the alpha_k
-        contamination described in preprocessor.MatrixSummaryFeatures.
-        """
-        d = self.data
-        X, y = d[f'X_{split}'], d[f'y_{split}']
-        col = self.out_feat_names.index(k_col)
-        p = self.best_est.predict_proba(X)[:, 1]
-        pred = p >= self.opt_tau
- 
-        q = pd.qcut(X[:, col], bins, labels=False, duplicates='drop')
-        rows = []
-        for b in np.unique(q):
-            m = (q == b) & (y == 1)
-            n = (q == b) & (y == 0)
-            rows.append({'bin': int(b),
-                         'recall': float(pred[m].mean()) if m.any() else np.nan,
-                         'fpr': float(pred[n].mean()) if n.any() else np.nan})
-        return pd.DataFrame(rows).set_index('bin')
-
     def plot_roc(self, ax):
+        # ROC curve from validation dataset
         ax.plot(self.fpr, self.tpr, label=f'ROC curve (AUC = {self.auc:.3f})', linewidth=2)
-        ax.scatter([self.opt_fpr], [1 - self.opt_fnr], color='red', zorder=5, 
+        ax.scatter([self.opt_fpr], [self.opt_tpr], color='red', zorder=5, 
                    label=f'Operating point (τ = {self.opt_tau:.3f})')
         ax.plot([0, 1], [0, 1], 'k--', label='Random classifier')
         ax.set_xlim([0.0, 1.0])
         ax.set_ylim([0.0, 1.05])
         ax.set_xlabel('False Positive Rate')
         ax.set_ylabel('True Positive Rate')
-        ax.set_title('Byzantine Classifier ROC Curve')
+        ax.set_title('Byzantine Classifier ROC Curve (val)')
         ax.legend(loc='lower right')
 
     def plot_pr(self,ax):
+        # PR curve from test dataset
         ax.plot(self.rec, self.prec, label=f'PR curve (AP = {self.ap:.3f})', linewidth=2)
         ax.axhline(self.prevalence, color='k', linestyle='--', 
                    label=f'Random classifier ({self.prevalence:.3f})')
@@ -354,20 +310,5 @@ class ByzClassifier():
         ax.set_ylim([0.0, 1.05])
         ax.set_xlabel('Recall (1 − FNR)')
         ax.set_ylabel('Precision')
-        ax.set_title('Byzantine Classifier PR Curve')
+        ax.set_title('Byzantine Classifier PR Curve (test)')
         ax.legend(loc='lower left')
-
-
-    def plot_feature_importance(self, X_te, y_te, ax):
-        names = list(self.out_feat_names)
-        assert len(names) == X_te.shape[1], f"{len(names)} names vs {X_te.shape[1]} columns"
-
-        r = permutation_importance(self.best_est, X_te, y_te, n_repeats=30, scoring='roc_auc', n_jobs=-1)
-
-        long = (pd.DataFrame(r.importances.T, columns=names).melt(var_name='feature', value_name='importance'))
-        order = r.importances_mean.argsort()[::-1]
-        order = [names[i] for i in order]
-
-        sns.violinplot(data=long, x='importance', y='feature', order=order, orient='h', color='steelblue', ax=ax)
-        ax.axvline(0, color='k', lw=0.8, ls='--')
-        ax.set(xlabel=f'Drop in roc-auc when permuted', title='Feature importance')
