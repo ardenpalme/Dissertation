@@ -143,6 +143,7 @@ class SystemSimulator():
             _, g = sgd_grad(Xl, yl, models[i], self.reg_param, self.batch_sz, rng)
             int_models[i] = models[i] - alphas[k] * g
             barrier.wait() # all intermediate models (x^{k+1/2}) written
+            barrier.wait() # Byzantine x^{k+1/2} written
             
             flagged = (byz_nbors & (rng.random(len(nbors)) < (1-self.params_C['C_fnr']))) | \
                     (hon_nbors & (rng.random(len(nbors)) < self.params_C['C_fpr']))
@@ -185,6 +186,7 @@ class SystemSimulator():
             _, g = sgd_grad(Xl, yl, models[i], self.reg_param, self.batch_sz, rng)
             int_models[i] = models[i] - alphas[k] * g
             barrier.wait() # all intermediate models (x^{k+1/2}) written
+            barrier.wait() # Byzantine x^{k+1/2} written
             
             feat.set_context(k, models[i], g)
             Z = self.pre_pipe.transform(feat.transform(np.stack([int_models[j] for j in nbors])))
@@ -219,6 +221,7 @@ class SystemSimulator():
             _, g = sgd_grad(Xl, yl, models[i], self.reg_param, self.batch_sz, rng)
             int_models[i] = models[i] - alphas[k] * g 
             barrier.wait() # all intermediate models (x^{k+1/2}) written
+            barrier.wait() # Byzantine x^{k+1/2} written
 
             models[i] = aggregate(i, int_models, self.W, self.G, self.B, self.H, agg_rule)
             barrier.wait() # all models (x^{k+1}) written

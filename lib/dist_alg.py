@@ -23,6 +23,7 @@ def byz_atk(i, barrier, models, int_models, X_train, y_train, dp,
                 _, g = sgd_grad(Xl, yl_perm, models[i], reg_param, batch_sz, rng)
                 int_models[i] = models[i] - alphas[k] * g
                 barrier.wait()
+                barrier.wait()
                 models[i] = sum(W[i, j] * int_models[j] for j in list(G.neighbors(i))+[i])
                 barrier.wait()
                 barrier.wait()
@@ -32,6 +33,7 @@ def byz_atk(i, barrier, models, int_models, X_train, y_train, dp,
             for k in range(K):
                 _, g = sgd_grad(Xl, yl, models[i], reg_param, batch_sz, rng)
                 int_models[i] = models[i] + flip_scale * alphas[k] * g
+                barrier.wait()
                 barrier.wait()
                 models[i] = sum(W[i, j] * int_models[j] for j in list(G.neighbors(i))+[i])
                 barrier.wait()
@@ -48,6 +50,7 @@ def byz_atk(i, barrier, models, int_models, X_train, y_train, dp,
                     base = 0.0
                 int_models[i] = base + sigma * rng.standard_normal(models[i].shape)
                 barrier.wait()
+                barrier.wait()
                 models[i] = sum(W[i, j] * int_models[j] for j in list(G.neighbors(i))+[i])
                 barrier.wait()
                 barrier.wait()
@@ -56,40 +59,28 @@ def byz_atk(i, barrier, models, int_models, X_train, y_train, dp,
             H_set = set(int(j) for j in H)
             hon_nbors = [int(j) for j in nbors if int(j) in H_set]
             if not hon_nbors:
-                warnings.warn(f"node {i}: no honest neighbour, {atk_type} "
-                              f"degenerates to honest behaviour")
+                warnings.warn(f"node {i}: no honest neighbour, {atk_type} degenerates to honest behaviour")
 
-            if kwargs['alie_z'] is None: alie_z = _alie_z(kwargs['num_nodes'], kwargs['b'])
-            else: alie_z = kwargs['alie_z']
+            alie_z = _alie_z(len(nbors)+1, len(nbors)-len(hon_nbors)+1)
             ipm_eps = kwargs['ipm_eps']
-            
-            prev_msgs = None
-            pseudo_grads = None
 
             for k in range(K):
-                if prev_msgs is None or pseudo_grads is None:
+                barrier.wait()                                    # A: honest x^{k+1/2} written
+                if hon_nbors:
+                    x_hon = models[hon_nbors].copy()              # x^k
+                    msgs  = int_models[hon_nbors].copy()          # x^{k+1/2}, current round
+                    if atk_type == 'ALIE':
+                        int_models[i] = msgs.mean(axis=0) - alie_z * msgs.std(axis=0)
+                    else:
+                        g_hat = (x_hon - msgs) / alphas[k]
+                        int_models[i] = models[i] + ipm_eps * alphas[k] * g_hat.mean(axis=0)
+                else:
                     _, g = sgd_grad(Xl, yl, models[i], reg_param, batch_sz, rng)
                     int_models[i] = models[i] - alphas[k] * g
- 
-                elif atk_type == 'ALIE':
-                    int_models[i] = prev_msgs.mean(axis=0) - alie_z * prev_msgs.std(axis=0)
- 
-                elif atk_type == 'IPM':  
-                    int_models[i] = models[i] + ipm_eps * alphas[k] * pseudo_grads.mean(axis=0)
-
-                # models holds x^k for every node
-                x_hon = models[hon_nbors].copy() if hon_nbors else None
- 
-                barrier.wait()
- 
-                # int_models x^{k+1/2} for every node
-                if hon_nbors:
-                    prev_msgs = int_models[hon_nbors].copy()
-                    pseudo_grads = (x_hon - prev_msgs) / alphas[k]
- 
+                barrier.wait()                                    # B: Byzantine x^{k+1/2} written
                 models[i] = sum(W[i, j] * int_models[j] for j in nbors + [i])
-                barrier.wait()
-                barrier.wait()
+                barrier.wait()                                    # C
+                barrier.wait()                                    # D
 
         case _:
             raise ValueError(f"Unknown attack type: {atk_type}")

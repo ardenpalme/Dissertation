@@ -83,6 +83,7 @@ class ByzClassifier():
             _, g = sgd_grad(Xl, yl, models[i], self.reg_param, self.batch_sz, rng)
             int_models[i] = models[i] - alphas[k] * g
             barrier.wait()
+            barrier.wait() # Byzantine x^{k+1/2} written
 
             if k in self.sampled_iters:
                 feat.set_context(k, models[i], g)
