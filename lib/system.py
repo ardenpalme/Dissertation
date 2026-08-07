@@ -44,6 +44,13 @@ class SystemSimulator():
 
         self.taus = taus if taus is not None else (self.proj_const * self.alphas)
 
+        self.X_shards = [self.X_train[self.dp[i]] for i in self.H]
+        self.X_H = np.vstack(self.X_shards)
+        self.y_H = np.concatenate([self.y_train[self.dp[i]] for i in self.H])
+        local_opt_res = self.mc.calc_local_opt(self.X_H, self.y_H, self.H, self.pi, self.dp, self.reg_param)
+        self.x_opt = local_opt_res['x_star']
+        self.x_pi_opt = local_opt_res['x_pi_star']
+
         # Shared Objects
         self.tar_node = self.rng.choice(self.H)
         self.barrier = threading.Barrier(self.num_nodes) 
@@ -72,6 +79,7 @@ class SystemSimulator():
         Pi = np.eye(h) - np.outer(np.ones(h),self.pi)
         X_perp = np.tensordot(Pi, Xh, axes=(1, 0))
         unif_dist=np.full(h,1/h)
+        x_pi_k = np.tensordot(self.pi, Xh, axes=(0,0))
 
         return {
             'test_acc':       ((self.X_test @ Xh.mean(axis=0)).argmax(1) == self.y_test).mean(),
@@ -83,6 +91,8 @@ class SystemSimulator():
             'max_test_acc':   self.test_acc_arr[self.H].max(),
             'min_train_loss': self.train_loss_arr[self.H].min(),
             'max_train_loss': self.train_loss_arr[self.H].max(),
+            'opt_gap_pi':     np.linalg.norm(x_pi_k - self.x_pi_opt),
+            'opt_gap':        np.linalg.norm(x_pi_k - self.x_opt),
         }
 
     def calc_realized_fpr_fnr(self,k):
@@ -328,6 +338,8 @@ class SystemSimulator():
 
         return df
 
+
+    # called after a simulation has run to completion
     def log_results(self, config, res, run_dir, run_id, logfile=None):
         sim_config = (self.W, self.H, self.B, self.dp, self.pi)
         log_fname = logfile if logfile is not None else LOGFILE 
@@ -335,7 +347,7 @@ class SystemSimulator():
 
         data = config.copy()
         data.update(res)
-        data.update(self.mc(sim_config, self.models, self.params_C['C_fpr'], self.params_C['C_fnr'], self.proj_const))
+        data.update(self.mc(sim_config, self.models, self.params_C['C_fpr'], self.params_C['C_fnr'], self.proj_const)) 
         payload = parse_results(data)
         payload['id'] = run_id
 

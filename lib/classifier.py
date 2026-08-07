@@ -219,13 +219,6 @@ class ByzClassifier():
                               max_iter=400, random_state=seed('classifier', 'mlp')),
                 {'alpha': [1e-4, 1e-2], 'learning_rate_init': [1e-3, 3e-3]},
             ),
-            'rf':(
-                RandomForestClassifier(n_estimators=500, class_weight='balanced_subsample',
-                           min_samples_leaf=50, max_features='sqrt',
-                           n_jobs=1, random_state=seed('classifier', 'rf')),
-                {'max_depth': [6, 12, None], 'min_samples_leaf': [20, 50, 200],
-                 'max_features': ['sqrt', 0.5]},
-            ),
             'xgb': (
                 XGBClassifier(tree_method='hist',
                               scale_pos_weight=(y_train == 0).sum() / max((y_train == 1).sum(), 1),
@@ -245,26 +238,27 @@ class ByzClassifier():
 
         return self.best_est, self.feat_pre_proc
  
-    def calc_optimal_op_pt(self, in_data=None, criterion='cost', prevalence=None, cost_fp=1.0, cost_fn=3.0):
+    def calc_optimal_op_pt(self, in_data=None, cost_fp=1.0, cost_fn=3.0):
         data = in_data if in_data is not None else self.data
         y = data['y_thr']
         p = self.best_est.predict_proba(data['X_thr'])[:, 1]
-        self.fpr, self.tpr, thr = roc_curve(y, p)
+        fpr, tpr, thr = roc_curve(y, p)
+        auc = roc_auc_score(y, p)
 
-        if criterion == 'cost':
-            pi = float(y.mean()) if prevalence is None else prevalence
-            cost = pi * cost_fn * (1 - self.tpr) + (1 - pi) * cost_fp * self.fpr
-            idx = int(np.argmin(cost))
-        else: # Youden criterion
-            idx = int(np.argmax(self.tpr - self.fpr))
+        pi = float(y.mean())
+        cost = pi * cost_fn * (1 - tpr) + (1 - pi) * cost_fp * fpr
+        idx = int(np.argmin(cost))
 
-        self.opt_fpr = float(self.fpr[idx])
-        self.opt_tpr = float(self.tpr[idx])
-        self.opt_fnr = float(1 - self.tpr[idx])
+        self.opt_fpr = float(fpr[idx])
+        self.opt_tpr = float(tpr[idx])
+        self.opt_fnr = float(1 - tpr[idx])
         self.opt_tau = float(np.clip(thr[idx], 0.0, 1.0))
  
-        return {'C_fpr': self.opt_fpr, 'C_fnr': self.opt_fnr,
-                'C_tau': self.opt_tau, 'cv_ap': self.cv_score,
+        return {'C_fpr': self.opt_fpr, 
+                'C_fnr': self.opt_fnr,
+                'C_tau': self.opt_tau, 
+                'C_auc': auc,
+                'cv_ap': self.cv_score,
                 'cv_params': self.cv_params}
 
     def test(self, in_data=None):
@@ -272,17 +266,19 @@ class ByzClassifier():
         X_C, y_C = d['X_test'], d['y_test'] 
  
         p = self.best_est.predict_proba(X_C)[:, 1]
-        #self.fpr, self.tpr, self.roc_thr = roc_curve(y_C, p)
+        self.fpr, self.tpr, self.roc_thr = roc_curve(y_C, p)
         self.auc = roc_auc_score(y_C, p)
         self.prec, self.rec, self.pr_thr = precision_recall_curve(y_C, p)
         self.ap = average_precision_score(y_C, p)
         self.prevalence = float(y_C.mean())
         j = int(np.clip(np.searchsorted(self.pr_thr, self.opt_tau), 0, len(self.prec) - 1))
-        self.op_prec, self.op_rec = self.prec[j], self.rec[j]
+        self.op_rec = self.rec[j]
+        self.op_prec = self.prec[j]
  
         tn, fp, fn, tp = confusion_matrix(y_C, (p >= self.opt_tau).astype(int)).ravel()
         return {'prevalence': self.prevalence, 'tau': self.opt_tau,
                 'tn': tn, 'fp': fp, 'fn': fn, 'tp': tp,
+                'op_prec':self.op_prec, 'op_rec': self.op_rec,
                 'beta_C': fn / max(fn + tp, 1), 'gamma_C': fp / max(fp + tn, 1),
                 'roc_auc': self.auc, 'avg_prec': self.ap}
 
