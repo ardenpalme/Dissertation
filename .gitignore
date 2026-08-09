@@ -3,3 +3,4 @@
 *.json
 *.gz
 __pycache__
+*.npz
