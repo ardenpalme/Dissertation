@@ -32,12 +32,13 @@ class SystemSimulator():
         self.rng = rng(seed)
         self.dp = dirichlet_partition(self.y_train, self.num_nodes, config['data_heterogeneity'], self.rng)
         self.G, self.W, self.B, self.H = self.gf.create_graph(config['graph_type'], config['graph_weights'], seed, **config['graph_args'])
-        self.Wbar, self.pi, self.lam_pi = effective_mixing(self.W, self.H, params_C['C_fpr'])
+        self.Wbar, self.pi, self.lam_pi = effective_mixing(self.W, self.H, params_C['C_fpr'], config['graph_args']['MH_target_pi'])
         self.alphas = get_alphas(self.K, config)
         self.proj_const = proj_const
         self.pre_pipe = pre_pipe
         self.clf = best_est
         self.params_C = params_C
+        self.dropout = config['sys']['dropout']
 
         self.X_shards = [self.X_train[self.dp[i]] for i in self.H]
         self.X_H = np.vstack(self.X_shards)
@@ -108,7 +109,11 @@ class SystemSimulator():
         gamma_k = fp.sum() / (fp.sum() + tn.sum() + eps)
         beta_k = fn.sum() / (fn.sum() + tp.sum() + eps)
         byz_w_k = E[:,k,7] @ self.pi
-        return dict(gamma_k=gamma_k, beta_k=beta_k, byz_w_k=byz_w_k)
+
+        fp_i, tn_i = self.edge_log[self.H][:, k, 1], self.edge_log[self.H][:, k, 2]
+        gamma_k_node = fp_i / (fp_i + tn_i + eps)   # (h,)
+
+        return dict(gamma_k=gamma_k, beta_k=beta_k, gamma_k_node=gamma_k_node, byz_w_k=byz_w_k)
 
     def calc_reduced_local_metrics(self, i, models): # ORACLE and Aggregators
         Xl, yl = self.X_train[self.dp[i]], self.y_train[self.dp[i]]
@@ -151,8 +156,8 @@ class SystemSimulator():
             barrier.wait() # all intermediate models (x^{k+1/2}) written
             barrier.wait() # Byzantine x^{k+1/2} written
             
-            flagged = (byz_nbors & (rng.random(len(nbors)) < (1-self.params_C['C_fnr']))) | \
-                    (hon_nbors & (rng.random(len(nbors)) < self.params_C['C_fpr']))
+            flagged = (byz_nbors & (rng.random(len(nbors)) < (1-self.params_C['C_fnr'][i]))) | \
+                    (hon_nbors & (rng.random(len(nbors)) < self.params_C['C_fpr'][i]))
 
             w_row = self.W[i].copy()
             w_row[nbors[flagged]] = 0.0
@@ -197,10 +202,8 @@ class SystemSimulator():
             feat.set_context(k, models[i], g)
             Z = self.pre_pipe.transform(feat.transform(np.stack([int_models[j] for j in nbors])))
             probs = self.clf.predict_proba(Z)[:, 1]
-            # flagged = probs >= self.params_C['C_tau']
 
-            r_opt = dropout
-            flagged = (probs >= self.params_C['C_tau']) & (rng_coins.random(len(nbors)) >= r_opt)
+            flagged = (probs >= self.params_C['C_tau'][i]) & (rng_coins.random(len(nbors)) >= dropout)
 
             w_row = self.W[i].copy()
             w_row[nbors[flagged]] = 0.0
@@ -304,11 +307,13 @@ class SystemSimulator():
         else: return []
 
 
-    def simulate(self, sim_params, dropout=0):
+    def simulate(self, sim_params, in_dropout=None):
         algorithms = sim_params['algorithms']
         atk_type = sim_params['atk_type']
         threat_model = sim_params['threat_model']
         seed = sim_params['seed']
+
+        dropout = in_dropout if in_dropout is not None else self.dropout
 
         tar_metrics = {alg : list() for alg in algorithms}
         if(threat_model == 'T0'):

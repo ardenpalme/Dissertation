@@ -4,51 +4,48 @@ from scipy.special import softmax
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss
 
-def calc_nu_sq(W, H, pi, gamma_C):
+def calc_nu_sq(W, H, pi, gamma_vec):
     Wh = W[np.ix_(H, H)]
     h = len(H)
+    gam_H = np.asarray(gamma_vec, float)[H]      # (h,) FPR of honest node H[a]
     Q = np.zeros((h, h))
     for a in range(h):
+        c_a = gam_H[a] * (1.0 - gam_H[a])        # row-dependent mask variance
         for c in range(h):
             if a != c and Wh[a, c] > 0:
-                e = np.zeros(h)
-                e[a] = 1.0
-                e[c] = -1.0
-                Q += pi[a] * Wh[a, c] ** 2 * np.outer(e, e)
+                e = np.zeros(h); e[a] = 1.0; e[c] = -1.0
+                Q += pi[a] * Wh[a, c]**2 * c_a * np.outer(e, e)
 
-    Q *= gamma_C * (1.0 - gamma_C)
     nu2 = float(sla.eigh(Q, np.diag(pi), eigvals_only=True).max())
     w_max = float((Wh - np.diag(np.diag(Wh))).max())
-    upper_bound = 4.0 * (pi.max() / pi.min()) * w_max * gamma_C * (1.0 - gamma_C)
-
+    upper_bound = 4.0 * (pi.max() / pi.min()) * w_max * float(np.max(gam_H * (1.0 - gam_H)))
     return nu2, upper_bound
 
 # Compute left Perron vector and effective mixing honest submatrix
-def effective_mixing(W, H, gamma_C):
+def effective_mixing(W, H, gamma_vec, pi_t):
     Wh = W[np.ix_(H, H)]
     h = len(H)
+    g = np.asarray(gamma_vec)[H] 
 
-    #  W_bar = E[What^k]
-    Wbar = (1.0 - gamma_C) * Wh
+    Wbar = (1.0 - g)[:, None] * Wh
     np.fill_diagonal(Wbar, 0.0)
     np.fill_diagonal(Wbar, 1.0 - Wbar.sum(1))
 
-    # Left Perron vector pi
+    pi = np.asarray(pi_t, float)[H] / (1.0 - g)
+    pi /= pi.sum()
+
     ev, evec = sla.eig(Wbar.T)
     j = int(np.argmin(np.abs(ev - 1.0)))
-    if abs(ev[j] - 1.0) > 1e-8:
-        raise ValueError("honest subgraph disconnected")
-    pi = np.real(evec[:, j])
-    pi = pi / pi.sum()
-    if pi.min() <= 0:
-        raise ValueError("honest subgraph reducible")
+    assert abs(ev[j] - 1.0) < 1e-8, "honest subgraph disconnected"
+    pi_num = np.real(evec[:, j]); pi_num /= pi_num.sum()
+
+    assert np.allclose(pi, pi_num, rtol=1e-8), np.abs(pi - pi_num).max()
+    assert np.allclose(pi[:, None] * Wbar, (pi[:, None] * Wbar).T, atol=1e-10)
 
     sp = np.sqrt(pi)
     Pi = np.eye(h) - np.outer(np.ones(h), pi)
     Msim = (sp[:, None] * ((Wbar - np.outer(np.ones(h), pi)) @ Pi)) / sp[None, :]
-    lam_pi = np.linalg.norm(Msim, 2)
-
-    return Wbar, pi, lam_pi
+    return Wbar, pi, np.linalg.norm(Msim, 2)
 
 class MetricsCalculator():
     def __init__(self, config, global_dataset, rng):
@@ -137,14 +134,14 @@ class MetricsCalculator():
         return float(max(Ls)), float(min(mus))
 
 
-    def __call__(self, sim_params, models, gamma_C, beta_C, proj_const):
+    def __call__(self, sim_params, models, gamma_vec, beta_C, proj_const, pi_t):
         self.W, self.H, self.B, self.dp, self.pi = sim_params 
         self.X_shards = [self.X_train[self.dp[i]] for i in self.H]
         self.X_H = np.vstack(self.X_shards)
         self.y_H = np.concatenate([self.y_train[self.dp[i]] for i in self.H])
 
-        _, _, lam_pi = effective_mixing(self.W, self.H, gamma_C)
-        nu2, upper_bound = calc_nu_sq(self.W, self.H, self.pi, gamma_C)
+        _, _, lam_pi = effective_mixing(self.W, self.H, gamma_vec, pi_t)
+        nu2, upper_bound = calc_nu_sq(self.W, self.H, self.pi, gamma_vec)
         L, mu = self.calc_L_mu(models[self.H], self.X_shards, self.reg_param)
 
         local_opt_res = self.calc_local_opt(self.X_H, self.y_H, self.H, self.pi, self.dp, self.reg_param)

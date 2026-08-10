@@ -16,7 +16,7 @@ BASE_CONF = {
         'atk_type':'sign_flip',
     },
     'train': {
-        'gamma_C': 0.12,
+        # 'gamma_C': 0.12, this is now a vector
         'beta_C': 0.1,
         'clf_model':'rbf',
         'train_atks': ['label_flip', 'sign_flip', 'gaussian', 'ALIE', 'IPM'],

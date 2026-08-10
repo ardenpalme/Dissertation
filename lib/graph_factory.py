@@ -100,16 +100,16 @@ class GraphFactory():
             
         return G, W, B, H
 
-def calc_graph_metrics(W, b, H, gamma_C=0.4): # worst-case FPR
+def calc_graph_metrics(W, H, gamma_vec, pi_t): # worst-case FPR
     
     L = -W.copy()
     np.fill_diagonal(L, 0.0)
     np.fill_diagonal(L, -L.sum(1))
 
-    mu2 = float(np.sort(np.linalg.eigvalsh(L))[1])
+    mu2 = float(np.sort(np.linalg.eigvals(L).real)[1])
 
-    _, pi, lam_pi = effective_mixing(W, H, gamma_C)
-    nu2, _ = calc_nu_sq(W, H, pi, gamma_C)
+    _, pi, lam_pi = effective_mixing(W, H, gamma_vec, pi_t)
+    nu2, _ = calc_nu_sq(W, H, pi, gamma_vec)
     s2 = lam_pi ** 2 + nu2
     g = 1.0 - s2
     

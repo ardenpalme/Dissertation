@@ -74,7 +74,7 @@ class ByzClassifier():
                                + [FEATURE_NAMES[i] for i in bounded])
 
 
-    def worker_RDSGD(self, i, barrier, models, int_models, alphas, taus,
+    def worker_RDSGD_ORACLE(self, i, barrier, models, int_models, alphas, taus,
                          results, beta_C, gamma_C, rng):
 
         Xl, yl = self.X[self.dp[i]], self.y[self.dp[i]]
@@ -98,7 +98,7 @@ class ByzClassifier():
                 groups.extend([i] * len(nbors))       # group = originating node
                 
             drop = np.where((byz_nbors & (rng.random(len(nbors)) < (1-beta_C))) 
-                            | (hon_nbors & (rng.random(len(nbors)) < gamma_C)))
+                            | (hon_nbors & (rng.random(len(nbors)) < gamma_C[i])))
             w_row = self.W[i].copy()
             w_row[np.asarray(nbors)[drop]] = 0.0
             w_row[i] = 1.0 - w_row[nbors].sum()
@@ -113,7 +113,7 @@ class ByzClassifier():
         self.int_models.fill(0)
         results = [None] * self.num_nodes
         
-        hon_threads = [threading.Thread(target=self.worker_RDSGD, 
+        hon_threads = [threading.Thread(target=self.worker_RDSGD_ORACLE, 
                         args=(i, self.barrier, self.models, self.int_models, self.alphas, self.taus, 
                               results, beta_C, gamma_C, rng('classifier', 'hon', seed, i)))
                        for i in self.H]
@@ -163,7 +163,7 @@ class ByzClassifier():
         test_atks = testing_attacks if testing_attacks is not None else self.testing_attacks
 
         if is_printing:
-            print(f"Simulating RDSGD @ (beta_C={beta_C}, gamma_C={gamma_C})")
+            print(f"Simulating RDSGD @ (beta_C = {beta_C}, gamma_C ∈ [{gamma_C.min():.2f},{gamma_C.max():.2f}])")
             print(f'Building training set. Simulating {train_atks} (seed {train_sim_seed})')
         self.init_simulation(config, proj_const, train_sim_seed)
         Xtr, ytr, gtr, atr = self._gather(train_atks, train_sim_seed, beta_C, gamma_C)
@@ -247,17 +247,17 @@ class ByzClassifier():
         data = in_data if in_data is not None else self.data
         y = data['y_thr']
         p = self.best_est.predict_proba(data['X_thr'])[:, 1]
-        fpr, tpr, thr = roc_curve(y, p)
+        self.val_fpr, self.val_tpr, self.val_thr = roc_curve(y, p)
         auc = roc_auc_score(y, p)
 
         pi = float(y.mean())
-        cost = pi * cost_fn * (1 - tpr) + (1 - pi) * cost_fp * fpr
+        cost = pi * cost_fn * (1 - self.val_tpr) + (1 - pi) * cost_fp * self.val_fpr
         idx = int(np.argmin(cost))
 
-        self.opt_fpr = float(fpr[idx])
-        self.opt_tpr = float(tpr[idx])
-        self.opt_fnr = float(1 - tpr[idx])
-        self.opt_tau = float(np.clip(thr[idx], 0.0, 1.0))
+        self.opt_fpr = float(self.val_fpr[idx])
+        self.opt_tpr = float(self.val_tpr[idx])
+        self.opt_fnr = float(1 - self.val_tpr[idx])
+        self.opt_tau = float(np.clip(self.val_thr[idx], 0.0, 1.0))
  
         return {'C_fpr': self.opt_fpr, 
                 'C_fnr': self.opt_fnr,
@@ -266,12 +266,33 @@ class ByzClassifier():
                 'cv_ap': self.cv_score,
                 'cv_params': self.cv_params}
 
+    def threshold_at_fpr(self, gamma_targets, mode='below'):
+        if not hasattr(self, 'val_fpr'):
+            raise RuntimeError("call calc_optimal_op_pt() first to fit the ROC")
+
+        gam = np.atleast_1d(np.asarray(gamma_targets, dtype=float))
+        fpr, tpr, thr = self.val_fpr, self.val_tpr, self.val_thr 
+
+        lo = np.clip(np.searchsorted(fpr, gam, side='right') - 1, 0, len(fpr) - 1)
+        if mode == 'nearest':
+            hi = np.clip(lo + 1, 0, len(fpr) - 1)
+            pick_hi = np.abs(fpr[hi] - gam) < np.abs(fpr[lo] - gam)
+            idx = np.where(pick_hi, hi, lo)
+        elif mode == 'below':
+            idx = lo
+        else: raise ValueError(mode)
+
+        tau = np.minimum(thr[idx], 1.0)
+        return dict(C_tau=tau,
+                    fpr_ach=fpr[idx], tpr_ach=tpr[idx], fnr_ach=1.0 - tpr[idx],
+                    fpr_target=gam, resolution=1.0 / max((self.data['y_thr'] == 0).sum(), 1))
+
     def test(self, in_data=None):
         d= in_data if in_data is not None else self.data
         X_C, y_C = d['X_test'], d['y_test'] 
  
         p = self.best_est.predict_proba(X_C)[:, 1]
-        self.fpr, self.tpr, self.roc_thr = roc_curve(y_C, p)
+        self.test_fpr, self.test_tpr, self.test_roc_thr = roc_curve(y_C, p)
         self.auc = roc_auc_score(y_C, p)
         self.prec, self.rec, self.pr_thr = precision_recall_curve(y_C, p)
         self.ap = average_precision_score(y_C, p)
@@ -288,8 +309,8 @@ class ByzClassifier():
                 'roc_auc': self.auc, 'avg_prec': self.ap}
 
     def plot_roc(self, ax):
-        # ROC curve from validation dataset
-        ax.plot(self.fpr, self.tpr, label=f'ROC curve (AUC = {self.auc:.3f})', linewidth=2)
+        # ROC curve from test dataset
+        ax.plot(self.test_fpr, self.test_tpr, label=f'ROC curve (AUC = {self.auc:.3f})', linewidth=2)
         ax.scatter([self.opt_fpr], [self.opt_tpr], color='red', zorder=5, 
                    label=f'Operating point (τ = {self.opt_tau:.3f})')
         ax.plot([0, 1], [0, 1], 'k--', label='Random classifier')
