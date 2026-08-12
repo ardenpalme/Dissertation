@@ -100,8 +100,7 @@ class GraphFactory():
             
         return G, W, B, H
 
-def calc_graph_metrics(W, H, gamma_vec, pi_t): # worst-case FPR
-    
+def calc_graph_metrics(W, H, gamma_vec, pi_t): 
     L = -W.copy()
     np.fill_diagonal(L, 0.0)
     np.fill_diagonal(L, -L.sum(1))
@@ -113,7 +112,7 @@ def calc_graph_metrics(W, H, gamma_vec, pi_t): # worst-case FPR
     s2 = lam_pi ** 2 + nu2
     g = 1.0 - s2
     
-    return {'spectral_gap' : mu2, 'g':g}
+    return {'spectral_gap' : mu2, 'g':g, 'lam_pi':lam_pi, 's2':s2}
 
 def add_graph_plot(G, B, axis):
     pos = nx.kamada_kawai_layout(G)

@@ -1,5 +1,6 @@
 GLOBAL_SEED = 12345
 NUM_NODES = 20
+
 BASE_CONF = {
     'alpha_init':0.5,
     'alpha_decay': 0.1,

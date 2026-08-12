@@ -6,9 +6,10 @@ FEATURE_NAMES = [
     'offset_conc', 'entropy', 'ce_diff', 'acc',
     'cos_dev_g', 'log_dev_norm', 'cos_dev_scale', 'cos_gbar',
     'ce_diff_nbr', 'acc_dev', 'log_alpha', 'k_frac',
+    'descent', 'curv_rq'
 ]
 
-HEAVY_FEATURES = ['log_norm_ratio', 'ce_diff', 'log_dev_norm', 'ce_diff_nbr']
+HEAVY_FEATURES = ['log_norm_ratio', 'ce_diff', 'log_dev_norm', 'ce_diff_nbr', 'curv_rq']
 
 class FeaturesTransformer(BaseEstimator, TransformerMixin):
     def __init__(self, node_id, X_local, y_local, alphas, reg_param):
@@ -104,17 +105,27 @@ class FeaturesTransformer(BaseEstimator, TransformerMixin):
         ce_abs = np.empty(m)
         acc = np.empty(m)
         off_conc = np.empty(m)
+        a_gap = np.empty(m)
+        curv  = np.empty(m)
         for j in range(m):
             logits_j = Xl @ X[j]
             pred_j = logits_j.argmax(axis=1)
             p = np.bincount((pred_j - pred_i) % C, minlength=C) / len(pred_i) + eps
             ent[j] = -(p * np.log(p)).sum()
-            ce_abs[j] = self._softmax_ce(logits_j, yl, X[j], w_bal)              # phi_8 term
+            ce_abs[j] = self._softmax_ce(logits_j, yl, X[j], w_bal)        # phi_8 term
             q = self._offset_hist(pred_j, C)                               # eq. (20)
             acc[j] = q[0]                                                  # phi_9 = q_j(0)
             err = 1.0 - q[0]                                               # Rbar
             off_conc[j] = (q[1:].max() / err) if err > eps else 1.0 / (C - 1)
+            Xmir = 2.0 * th_i - X[j]                        # x_i^k + u_j
+            ce_mir = self._softmax_ce(Xl @ Xmir, yl, Xmir, w_bal)
+            a_gap[j] = ce_mir - ce_i
+            curv[j]  = (Dn[j] ** 2) + eps                   # ||u_j||^2
+
         ce_diff = ce_abs - ce_i
+        b_gap = ce_abs - ce_i                               # = ce_diff = phi_8
+        descent   = (a_gap - b_gap) / (np.abs(a_gap) + np.abs(b_gap) + eps)
+        curv_rq   = (a_gap + b_gap) / curv
 
         # Leave-one-out neighbourhood-relative features
         if m >= 3:
@@ -161,6 +172,7 @@ class FeaturesTransformer(BaseEstimator, TransformerMixin):
             cos_dev_g, log_dev_norm, cos_dev_scale, cos_gbar,
             ce_diff_nbr, acc_dev,
             log_alpha, k_frac,
+            descent, curv_rq
         ])
 
         assert feats.shape[1] == len(FEATURE_NAMES) 

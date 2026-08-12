@@ -34,6 +34,7 @@ class ByzClassifier():
         self.batch_sz = config['batch_sz']
         self.iter_sample_sz = self.K // 2
         self.gf = gf
+        self.data = None
 
         self.X = global_dataset['X_train']
         self.y = global_dataset['y_train']
