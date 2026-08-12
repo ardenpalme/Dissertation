@@ -52,7 +52,7 @@ def clf_stage(g, config_g, run_dir, b):
     return g, dict(proj_const=proj_const, est=clf_est, preproc=clf_preproc,
                    op_pt=clf_op_pt, clf_thr=clf_thr, metrics=clf.test(), gamma_sys=gamma_sys)
 
-def sim_task(g, config_g, atk, s, proj_const, preproc, est, gamma_sys, params_C, algs, b): 
+def sim_task(g, config_g, atk, s, proj_const, preproc, est, gamma_sys, params_C, algs, b, seeds): 
     os.environ["PYTHONWARNINGS"] = "ignore::UserWarning"
     gd = load_dataset() 
     gf = GraphFactory(config_g['train']['num_nodes'], b)
@@ -64,7 +64,7 @@ def sim_task(g, config_g, atk, s, proj_const, preproc, est, gamma_sys, params_C,
     df = ss.simulate(dict(algorithms=algs, atk_type=atk, threat_model='T3', seed=s))
     
     consts = None
-    if s == SEEDS[0]:
+    if s == seeds[0]:
         mc = MetricsCalculator(config_g, gd, rng('metrics-calculator'))
         consts = mc(ss.get_sim_config(), ss.models, params_C['C_fpr'], params_C['C_fnr'], proj_const, stationary_dist)
         for k in ('pi', 'x_opt', 'x_pi_opt'): consts.pop(k, None)
