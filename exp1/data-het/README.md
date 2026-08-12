@@ -1,0 +1,3 @@
+High data heterogeneity run (data heterogeneity $\alpha=8$, $\mathbf{\pi}^t$ uniform, $b=5$)
+Results:
+* label_flip on random regular and barbasi-albert graphs had FNR (and hence admitted Byz mass) increasing substantially around iteration $k=175$. This lead to a lack of Lyapunov convergence as evidenced by $V^k$ increasing unbounded that same iteration in both of those cases. This suggests a deviation from the probabilistic-dropout model put forth earlier.

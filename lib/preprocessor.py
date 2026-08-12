@@ -3,19 +3,20 @@ from sklearn.base import BaseEstimator, TransformerMixin
 
 FEATURE_NAMES = [
     'cos_g', 'log_norm_ratio', 'stable_rank', 'margin',
-    'shift_off_diag', 'shift_conc', 'entropy', 'ce_diff',
-    'acc', 'cos_dev_g', 'log_dev_norm', 'cos_dev_scale',
-    'cos_gbar', 'ce_diff_nbr', 'acc_dev', 'log_alpha', 'k_frac',
+    'offset_conc', 'entropy', 'ce_diff', 'acc',
+    'cos_dev_g', 'log_dev_norm', 'cos_dev_scale', 'cos_gbar',
+    'ce_diff_nbr', 'acc_dev', 'log_alpha', 'k_frac',
 ]
 
 HEAVY_FEATURES = ['log_norm_ratio', 'ce_diff', 'log_dev_norm', 'ce_diff_nbr']
 
-class MatrixSummaryFeatures(BaseEstimator, TransformerMixin):
-    def __init__(self, node_id, X_local, y_local, alphas):
+class FeaturesTransformer(BaseEstimator, TransformerMixin):
+    def __init__(self, node_id, X_local, y_local, alphas, reg_param):
         self.X_local = X_local # (n_loc, d) local (augmented) features
         self.y_local = y_local # (n_loc,)  local labels
         self.node_id = node_id
         self.alphas = alphas
+        self.reg_param = reg_param
 
     def set_context(self, k, theta_ref, g):
         self.theta_ref = np.asarray(theta_ref)  # (d,C) current model of node i
@@ -26,22 +27,50 @@ class MatrixSummaryFeatures(BaseEstimator, TransformerMixin):
     def fit(self, X, y=None):
         return self
 
-    @staticmethod
-    def _softmax_ce(logits, y):
+    def _precompute(self, C):
+        if getattr(self, '_pre_C', None) == C: return
+        yl = self.y_local
+        cnt = np.bincount(yl, minlength=C).astype(float)
+        self._cnt = cnt
+        self._sup = np.flatnonzero(cnt > 0)
+        self._n_sup = len(self._sup)
+        self._w_bal = 1.0 / (self._n_sup * cnt[yl])
+        self._pre_C = C
+
+    def _softmax_ce(self, logits, y, x=None, w=None):
         z = logits - logits.max(axis=1, keepdims=True)
         log_p = z - np.log(np.exp(z).sum(axis=1, keepdims=True))
-        return -log_p[np.arange(len(y)), y].mean()
-        
-    @staticmethod
-    def _shift_scores(theta_i, theta_j, eps=1e-12):
-        A = theta_i.T @ theta_j  # (C, C)
-        A /= (np.linalg.norm(theta_i, axis=0)[:, None] * np.linalg.norm(theta_j, axis=0)[None, :] + eps)
+        nll = -log_p[np.arange(len(y)), y]
+        ce = float(nll.mean()) if w is None else float(nll @ w)
+        if x is not None:
+            ce += 0.5 * self.reg_param * float((x ** 2).sum())
+        return ce
+
+    def _offset_hist(self, pred_j, C):
+        """Class-balanced offset histogram q_j of eq. (20). Sums to 1."""
+        yl = self.y_local
+        off = np.zeros((C, C))
+        np.add.at(off, (yl, (pred_j - yl) % C), 1.0)
+        sup, cnt = self._sup, self._cnt
+        return (off[sup] / cnt[sup, None]).sum(axis=0) / self._n_sup
+
+    def _shift_profile(self, M, U, eps=1e-12):
+        """varrho_j of eq. (21): support-restricted and sign-corrected."""
+        A = M.T @ U                                            # (C, C)
+        A = A / (np.linalg.norm(M, axis=0)[:, None]
+                 * np.linalg.norm(U, axis=0)[None, :] + eps)
         C = A.shape[0]
-        return np.array([np.mean(np.diag(np.roll(A, -s, axis=1))) for s in range(C)]) # (C,)
+        sup = self._sup
+        return np.array([-np.mean(np.diag(np.roll(A, -s, axis=1))[sup])
+                         for s in range(C)])                   # (C,)
 
     def transform(self, X):
         m, d, C = X.shape # stacked int models of the m neighbours
         eps = 1e-12
+
+        self._precompute(C)
+        n_sup = self._n_sup
+        w_bal = self._w_bal
  
         th_i = self.theta_ref
         gi = self.g.ravel()
@@ -64,26 +93,27 @@ class MatrixSummaryFeatures(BaseEstimator, TransformerMixin):
         stable_rank = (sv ** 2).sum(axis=1) / (sv[:, 0] ** 2 + eps)
 
         M = (Xl.T @ np.eye(C)[yl]) / len(yl)
-        sig = np.array([self._shift_scores(M, D3[j]) for j in range(m)])
-        margin = sig.max(axis=1) - sig[:, 0]
-        shift_off_diag = (sig.argmax(axis=1) != 0).astype(float)
-        sig_pos = np.clip(sig, 0.0, None)
-        shift_conc = sig_pos.max(axis=1) / (sig_pos.sum(axis=1) + eps)
+        rho = np.array([self._shift_profile(M, D3[j]) for j in range(m)])   # (m, C)
+        margin = rho.max(axis=1) - rho[:, 0]                               # phi_4
 
         logits_i = Xl @ th_i
+        ce_i = self._softmax_ce(logits_i, yl, th_i, w_bal)                       # Fbar(x_i^k)
         pred_i = logits_i.argmax(axis=1)
-        ce_i = self._softmax_ce(logits_i, yl)
- 
+
         ent = np.empty(m)
         ce_abs = np.empty(m)
         acc = np.empty(m)
+        off_conc = np.empty(m)
         for j in range(m):
             logits_j = Xl @ X[j]
             pred_j = logits_j.argmax(axis=1)
             p = np.bincount((pred_j - pred_i) % C, minlength=C) / len(pred_i) + eps
             ent[j] = -(p * np.log(p)).sum()
-            ce_abs[j] = self._softmax_ce(logits_j, yl)
-            acc[j] = (pred_j == yl).mean()
+            ce_abs[j] = self._softmax_ce(logits_j, yl, X[j], w_bal)              # phi_8 term
+            q = self._offset_hist(pred_j, C)                               # eq. (20)
+            acc[j] = q[0]                                                  # phi_9 = q_j(0)
+            err = 1.0 - q[0]                                               # Rbar
+            off_conc[j] = (q[1:].max() / err) if err > eps else 1.0 / (C - 1)
         ce_diff = ce_abs - ce_i
 
         # Leave-one-out neighbourhood-relative features

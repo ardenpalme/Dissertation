@@ -5,7 +5,7 @@ from scipy.special import log_softmax
 
 from utils import rng, sgd_grad, proj_tau, dirichlet_partition, get_alphas
 from metrics import MetricsCalculator, effective_mixing
-from preprocessor import MatrixSummaryFeatures
+from preprocessor import FeaturesTransformer
 from dist_alg import aggregate, byz_atk
 
 class SystemSimulator():
@@ -38,7 +38,6 @@ class SystemSimulator():
         self.pre_pipe = pre_pipe
         self.clf = best_est
         self.params_C = params_C
-        self.dropout = config['sys']['dropout']
 
         self.X_shards = [self.X_train[self.dp[i]] for i in self.H]
         self.X_H = np.vstack(self.X_shards)
@@ -187,9 +186,9 @@ class SystemSimulator():
 
                 tar_metrics.append(metrics)        
 
-    def worker_RDSGD(self, i, barrier, models, int_models, tar_node, tar_metrics, alphas, rng, rng_coins, dropout):
+    def worker_RDSGD(self, i, barrier, models, int_models, tar_node, tar_metrics, alphas, rng):
         Xl, yl = self.X_train[self.dp[i]], self.y_train[self.dp[i]]
-        feat = MatrixSummaryFeatures(i, Xl, yl, alphas)
+        feat = FeaturesTransformer(i, Xl, yl, alphas, self.reg_param)
         nbors = np.array(list(self.G.neighbors(i)))
         is_byz = np.isin(nbors, self.B)
 
@@ -203,7 +202,7 @@ class SystemSimulator():
             Z = self.pre_pipe.transform(feat.transform(np.stack([int_models[j] for j in nbors])))
             probs = self.clf.predict_proba(Z)[:, 1]
 
-            flagged = (probs >= self.params_C['C_tau'][i]) & (rng_coins.random(len(nbors)) >= dropout)
+            flagged = (probs >= self.params_C['C_tau'][i])
 
             w_row = self.W[i].copy()
             w_row[nbors[flagged]] = 0.0
@@ -272,14 +271,13 @@ class SystemSimulator():
                 tar_metrics.append(metrics)        
 
 
-    def create_threads(self, config_params, barrier, models, int_models, tar_metrics, tar_node, seed, dropout):
+    def create_threads(self, config_params, barrier, models, int_models, tar_metrics, tar_node, seed):
         alg_type, alg, node_ids = config_params
         if(alg_type == 'hon'):
             if(alg == 'RDSGD'):
                 return [threading.Thread(target=self.worker_RDSGD, 
                                          args=(i, barrier, models, int_models, tar_node, tar_metrics['RDSGD'],
-                                               self.alphas, rng('sys','sgd', seed, i), 
-                                               rng('sys', 'coins', seed, i+(2*self.num_nodes)),dropout))
+                                               self.alphas, rng('sys','sgd', seed, i)))
                         for i in node_ids]
             elif(alg == 'DSGD'):
                 return [threading.Thread(target=self.worker_DSGD, 
@@ -307,13 +305,11 @@ class SystemSimulator():
         else: return []
 
 
-    def simulate(self, sim_params, in_dropout=None):
+    def simulate(self, sim_params):
         algorithms = sim_params['algorithms']
         atk_type = sim_params['atk_type']
         threat_model = sim_params['threat_model']
         seed = sim_params['seed']
-
-        dropout = in_dropout if in_dropout is not None else self.dropout
 
         tar_metrics = {alg : list() for alg in algorithms}
         if(threat_model == 'T0'):
@@ -321,7 +317,7 @@ class SystemSimulator():
                 self.models.fill(0)
                 self.int_models.fill(0)
                 threads = self.create_threads(('hon', alg, np.arange(self.num_nodes)), 
-                                              self.barrier, self.models, self.int_models, tar_metrics, self.tar_node, seed, dropout)
+                                              self.barrier, self.models, self.int_models, tar_metrics, self.tar_node, seed)
                 if self.is_printing_logs:
                     print(alg.center(len("=" * 56), '='))
 
@@ -335,10 +331,10 @@ class SystemSimulator():
                 self.models.fill(0)
                 self.int_models.fill(0)
                 hon_threads = self.create_threads(('hon', alg, self.H), 
-                                              self.barrier, self.models, self.int_models, tar_metrics, self.tar_node, seed, dropout)
+                                              self.barrier, self.models, self.int_models, tar_metrics, self.tar_node, seed)
 
                 byz_threads = self.create_threads(('byz', atk_type, self.B), 
-                                              self.barrier, self.models, self.int_models, tar_metrics, self.tar_node, seed, dropout)
+                                              self.barrier, self.models, self.int_models, tar_metrics, self.tar_node, seed)
                 threads = hon_threads + byz_threads 
 
                 if self.is_printing_logs:

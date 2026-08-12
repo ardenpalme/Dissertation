@@ -10,7 +10,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LogisticRegression
 from utils import load_from_pkl, rng, save_to_pkl, seed, sgd_grad, proj_tau, dirichlet_partition, get_alphas
 from dist_alg import byz_atk
-from preprocessor import MatrixSummaryFeatures, FEATURE_NAMES, HEAVY_FEATURES
+from preprocessor import FeaturesTransformer, FEATURE_NAMES, HEAVY_FEATURES
 from xgboost import XGBClassifier
 
 def save_run(clf, fname, extra=None):
@@ -78,7 +78,7 @@ class ByzClassifier():
                          results, beta_C, gamma_C, rng):
 
         Xl, yl = self.X[self.dp[i]], self.y[self.dp[i]]
-        feat = MatrixSummaryFeatures(i, Xl, yl, alphas)
+        feat = FeaturesTransformer(i, Xl, yl, alphas, self.reg_param)
         nbors = list(self.G.neighbors(i))
         byz_nbors = np.isin(nbors, self.B)
         hon_nbors = np.isin(nbors, self.H)
