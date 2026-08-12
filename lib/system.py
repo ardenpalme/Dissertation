@@ -28,16 +28,17 @@ class SystemSimulator():
         self.print_freq = self.K // 4
 
 
-    def init_simulation(self, config, proj_const, pre_pipe, best_est, params_C, seed, is_printing_logs=True, taus=None):
+    def init_simulation(self, config, proj_const, pre_pipe, best_est, oracle_params, rdsgd_params, seed, is_printing_logs=True, taus=None):
         self.rng = rng(seed)
         self.dp = dirichlet_partition(self.y_train, self.num_nodes, config['data_heterogeneity'], self.rng)
         self.G, self.W, self.B, self.H = self.gf.create_graph(config['graph_type'], config['graph_weights'], seed, **config['graph_args'])
-        self.Wbar, self.pi, self.lam_pi = effective_mixing(self.W, self.H, params_C['C_fpr'], config['graph_args']['MH_target_pi'])
+        self.Wbar, self.pi, self.lam_pi = effective_mixing(self.W, self.H, rdsgd_params['C_fpr'], config['graph_args']['MH_target_pi'])
         self.alphas = get_alphas(self.K, config)
         self.proj_const = proj_const
         self.pre_pipe = pre_pipe
         self.clf = best_est
-        self.params_C = params_C
+        self.oracle_params = oracle_params
+        self.rdsgd_params = rdsgd_params 
 
         self.X_shards = [self.X_train[self.dp[i]] for i in self.H]
         self.X_H = np.vstack(self.X_shards)
@@ -108,7 +109,7 @@ class SystemSimulator():
         byz_w_k = E[:,k,7] @ self.pi
 
         fp_i, tn_i = self.edge_log[self.H][:, k, 1], self.edge_log[self.H][:, k, 2]
-        gamma_k_node = fp_i / (fp_i + tn_i + eps)   # (h,)
+        gamma_k_node = fp_i / (fp_i + tn_i + eps) 
 
         return dict(gamma_k=gamma_k, beta_k=beta_k, gamma_k_node=gamma_k_node, byz_w_k=byz_w_k)
 
@@ -123,7 +124,7 @@ class SystemSimulator():
         self.train_loss_arr[i] = ce.mean() + 0.5 * self.reg_param * np.linalg.norm(models[i])**2
 
 
-    def calc_full_local_metrics(self, i, k, models, probs, w_row, proj, x_prev, nbors, flagged, is_adv, is_hon):
+    def calc_full_local_metrics(self, i, k, models, w_row, proj, x_prev, nbors, flagged, is_adv, is_hon):
         self.calc_reduced_local_metrics(i, models)
 
         # rho2_k 
@@ -138,11 +139,11 @@ class SystemSimulator():
                                self.W[i, nbors][tp].sum(), self.W[i, nbors][fp].sum(), 
                                self.W[i, nbors][tn].sum(), self.W[i, nbors][fn].sum()]
 
-    def worker_RDSGD_oracle(self, i, barrier, models, int_models, tar_node, tar_metrics, alphas, rng):
+    def worker_RDSGD_oracle(self, i, barrier, models, int_models, tar_node, tar_metrics, alphas, rng, oracle_id):
         Xl, yl = self.X_train[self.dp[i]], self.y_train[self.dp[i]]
         nbors = np.array(list(self.G.neighbors(i)))
         is_byz  = np.isin(nbors, self.B)
-        is_adv  = is_byz & ~self.abstain[nbors]     # Byzantine and actually attacking
+        is_adv  = is_byz & ~self.abstain[nbors]
         is_hon  = ~is_byz
 
         for k in range(self.K):
@@ -151,8 +152,8 @@ class SystemSimulator():
             barrier.wait() # all intermediate models (x^{k+1/2}) written
             barrier.wait() # Byzantine x^{k+1/2} written
             
-            flagged = (is_adv & (rng.random(len(nbors)) < (1-self.params_C['C_fnr'][i]))) | \
-                    (is_hon & (rng.random(len(nbors)) < self.params_C['C_fpr'][i]))
+            flagged = (is_adv & (rng.random(len(nbors)) < (1-self.oracle_params[oracle_id]['C_fnr'][i]))) | \
+                    (is_hon & (rng.random(len(nbors)) < self.oracle_params[oracle_id]['C_fpr'][i]))
 
             w_row = self.W[i].copy()
             w_row[nbors[flagged]] = 0.0
@@ -187,7 +188,7 @@ class SystemSimulator():
         feat = FeaturesTransformer(i, Xl, yl, alphas, self.reg_param)
         nbors = np.array(list(self.G.neighbors(i)))
         is_byz  = np.isin(nbors, self.B)
-        is_adv  = is_byz & ~self.abstain[nbors]     # Byzantine and actually attacking
+        is_adv  = is_byz & ~self.abstain[nbors]
         is_hon  = ~is_byz
 
         for k in range(self.K):
@@ -200,7 +201,7 @@ class SystemSimulator():
             Z = self.pre_pipe.transform(feat.transform(np.stack([int_models[j] for j in nbors])))
             probs = self.clf.predict_proba(Z)[:, 1]
 
-            flagged = (probs >= self.params_C['C_tau'][i])
+            flagged = (probs >= self.rdsgd_params['C_tau'][i])
 
             w_row = self.W[i].copy()
             w_row[nbors[flagged]] = 0.0
@@ -211,7 +212,7 @@ class SystemSimulator():
             models[i] = sum(w_row[j] * proj[j] for j in np.append(nbors, i)) 
             barrier.wait() # all models (x^{k+1}) written
 
-            self.calc_full_local_metrics(i, k, models, probs, w_row, proj, x_prev, nbors, flagged, is_adv, is_hon)
+            self.calc_full_local_metrics(i, k, models, w_row, proj, x_prev, nbors, flagged, is_adv, is_hon)
             barrier.wait() # all metrics collected by all honest workers
 
             if(i == tar_node):
@@ -282,10 +283,11 @@ class SystemSimulator():
                                          args=(i, barrier,  models, int_models, tar_node, tar_metrics['DSGD'],
                                                self.alphas, rng('sys','sgd', seed, i))) 
                         for i in node_ids]
-            elif(alg == 'ORACLE'):
+            elif(alg.startswith('ORACLE')):
+                oracle_id = alg.split("_")[1]
                 return [threading.Thread(target=self.worker_RDSGD_oracle, 
                                          args=(i, barrier, models, int_models, tar_node, tar_metrics['ORACLE'],
-                                               self.alphas, rng('sys','sgd', seed, i)))
+                                               self.alphas, rng('sys','sgd', seed, i), oracle_id))
                         for i in node_ids]
 
             return [threading.Thread(target=self.worker_AGG, 
@@ -320,7 +322,7 @@ class SystemSimulator():
         seed = sim_params['seed']
 
         self.abstain = self._abstain_mask(atk_type)
-        self.n_abstain = int(self.abstain.sum())     # log this per (topology, seed, b)
+        self.n_abstain = int(self.abstain.sum())
 
         tar_metrics = {alg : list() for alg in algorithms}
         if(threat_model == 'T0'):
