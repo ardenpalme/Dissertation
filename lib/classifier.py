@@ -84,6 +84,10 @@ class ByzClassifier():
         byz_nbors = np.isin(nbors, self.B)
         hon_nbors = np.isin(nbors, self.H)
 
+        # a Byzantine neighbour that abstains emits honest messages -> unusable label
+        keep = ~(byz_nbors & self.abstain[nbors])            # (m,) bool
+        kept_labels = [int(j in self.B) for j, kp in zip(nbors, keep) if kp]
+
         feats, labels, groups = [], [], []
         for k in range(self.K):
             _, g = sgd_grad(Xl, yl, models[i], self.reg_param, self.batch_sz, rng)
@@ -94,9 +98,9 @@ class ByzClassifier():
             if k in self.sampled_iters:
                 feat.set_context(k, models[i], g)
                 Z = feat.transform(np.stack([int_models[j] for j in nbors]))
-                feats.append(Z)
-                labels.extend(int(j in self.B) for j in nbors)
-                groups.extend([i] * len(nbors))       # group = originating node
+                feats.append(Z[keep])
+                labels.extend(kept_labels)
+                groups.extend([i] * int(keep.sum()))
                 
             drop = np.where((byz_nbors & (rng.random(len(nbors)) < (1-beta_C))) 
                             | (hon_nbors & (rng.random(len(nbors)) < gamma_C[i])))
@@ -107,12 +111,31 @@ class ByzClassifier():
             barrier.wait()
             barrier.wait()
 
-        results[i] = (np.concatenate(feats), np.array(labels), np.array(groups))
+        if feats:
+            results[i] = (np.concatenate(feats), np.array(labels), np.array(groups))
+        else:
+            p = len(FEATURE_NAMES)
+            results[i] = (np.empty((0, p)), np.array([], int), np.array([], int))
+
+
+    def _abstain_mask(self, atk_type):
+        a = np.zeros(self.num_nodes, dtype=bool)
+        if atk_type not in ('ALIE', 'IPM'):
+            return a
+        min_hon = 2 if atk_type == 'ALIE' else 1
+        H_set = set(int(j) for j in self.H)
+        for i in self.B:
+            n_hon = sum(int(j) in H_set for j in self.G.neighbors(int(i)))
+            a[int(i)] = n_hon < min_hon
+        return a
 
     def simulate(self, atk_type, seed, beta_C, gamma_C):
         self.models.fill(0)
         self.int_models.fill(0)
         results = [None] * self.num_nodes
+
+        self.abstain = self._abstain_mask(atk_type)
+        self.n_abstain = int(self.abstain.sum())     # log this per (topology, seed, b)
         
         hon_threads = [threading.Thread(target=self.worker_RDSGD_ORACLE, 
                         args=(i, self.barrier, self.models, self.int_models, self.alphas, self.taus, 
@@ -123,7 +146,7 @@ class ByzClassifier():
                         args=(i, self.barrier, self.models, self.int_models, self.X, self.y, self.dp, 
                               self.C, self.K, self.W, self.G, self.H,
                               self.reg_param, self.batch_sz, self.alphas, atk_type, rng('classifier', 'byz', seed, i)),
-                        kwargs={'ipm_eps':0.5}) 
+                              kwargs={'ipm_eps':0.5, 'abstain':self.abstain}) 
                        for i in self.B]
         
         threads = hon_threads + byz_threads

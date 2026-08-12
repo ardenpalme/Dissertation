@@ -62,8 +62,6 @@ class SystemSimulator():
         self.E_sq = np.zeros(self.num_nodes)
         self.train_loss_arr = np.zeros(self.num_nodes)
         self.edge_log = np.zeros((self.num_nodes, self.K, 8))
-        self.score_log = np.zeros((self.num_nodes, self.K, self.num_nodes))
-        self.byz_log = np.zeros((self.num_nodes, self.K, self.num_nodes))
 
     def calc_reduced_rdsgd_consts(self):
         L, mu = self.mc.calc_L_mu(self.models[self.H], self.X_shards, self.reg_param)
@@ -125,7 +123,7 @@ class SystemSimulator():
         self.train_loss_arr[i] = ce.mean() + 0.5 * self.reg_param * np.linalg.norm(models[i])**2
 
 
-    def calc_full_local_metrics(self, i, k, models, probs, w_row, proj, x_prev, nbors, flagged, is_byz):
+    def calc_full_local_metrics(self, i, k, models, probs, w_row, proj, x_prev, nbors, flagged, is_adv, is_hon):
         self.calc_reduced_local_metrics(i, models)
 
         # rho2_k 
@@ -134,20 +132,18 @@ class SystemSimulator():
         self.E_sq[i] = float(np.sum(E_i**2))
 
         # fpr_k and fnr_k 
-        tp, fp = flagged & is_byz,  flagged & ~is_byz
-        tn, fn = ~flagged & ~is_byz, ~flagged & is_byz
+        tp, fn = flagged & is_adv,  ~flagged & is_adv
+        fp, tn = flagged & is_hon,  ~flagged & is_hon
         self.edge_log[i, k] = [tp.sum(), fp.sum(), tn.sum(), fn.sum(),
                                self.W[i, nbors][tp].sum(), self.W[i, nbors][fp].sum(), 
                                self.W[i, nbors][tn].sum(), self.W[i, nbors][fn].sum()]
-        self.score_log[i, k, :len(nbors)] = probs
-        self.byz_log[i, k, :len(nbors)] = is_byz
 
     def worker_RDSGD_oracle(self, i, barrier, models, int_models, tar_node, tar_metrics, alphas, rng):
         Xl, yl = self.X_train[self.dp[i]], self.y_train[self.dp[i]]
         nbors = np.array(list(self.G.neighbors(i)))
-        byz_nbors = np.isin(nbors, self.B)
-        hon_nbors = np.isin(nbors, self.H)
-        is_byz = np.isin(nbors, self.B)
+        is_byz  = np.isin(nbors, self.B)
+        is_adv  = is_byz & ~self.abstain[nbors]     # Byzantine and actually attacking
+        is_hon  = ~is_byz
 
         for k in range(self.K):
             _, g = sgd_grad(Xl, yl, models[i], self.reg_param, self.batch_sz, rng)
@@ -155,8 +151,8 @@ class SystemSimulator():
             barrier.wait() # all intermediate models (x^{k+1/2}) written
             barrier.wait() # Byzantine x^{k+1/2} written
             
-            flagged = (byz_nbors & (rng.random(len(nbors)) < (1-self.params_C['C_fnr'][i]))) | \
-                    (hon_nbors & (rng.random(len(nbors)) < self.params_C['C_fpr'][i]))
+            flagged = (is_adv & (rng.random(len(nbors)) < (1-self.params_C['C_fnr'][i]))) | \
+                    (is_hon & (rng.random(len(nbors)) < self.params_C['C_fpr'][i]))
 
             w_row = self.W[i].copy()
             w_row[nbors[flagged]] = 0.0
@@ -167,8 +163,8 @@ class SystemSimulator():
             barrier.wait() # all models (x^{k+1}) written
 
             # fpr_k and fnr_k 
-            tp, fp = flagged & is_byz,  flagged & ~is_byz
-            tn, fn = ~flagged & ~is_byz, ~flagged & is_byz
+            tp, fn = flagged & is_adv,  ~flagged & is_adv
+            fp, tn = flagged & is_hon,  ~flagged & is_hon
             self.edge_log[i, k] = [tp.sum(), fp.sum(), tn.sum(), fn.sum(),
                                    self.W[i, nbors][tp].sum(), self.W[i, nbors][fp].sum(), 
                                    self.W[i, nbors][tn].sum(), self.W[i, nbors][fn].sum()]
@@ -190,7 +186,9 @@ class SystemSimulator():
         Xl, yl = self.X_train[self.dp[i]], self.y_train[self.dp[i]]
         feat = FeaturesTransformer(i, Xl, yl, alphas, self.reg_param)
         nbors = np.array(list(self.G.neighbors(i)))
-        is_byz = np.isin(nbors, self.B)
+        is_byz  = np.isin(nbors, self.B)
+        is_adv  = is_byz & ~self.abstain[nbors]     # Byzantine and actually attacking
+        is_hon  = ~is_byz
 
         for k in range(self.K):
             _, g = sgd_grad(Xl, yl, models[i], self.reg_param, self.batch_sz, rng)
@@ -213,7 +211,7 @@ class SystemSimulator():
             models[i] = sum(w_row[j] * proj[j] for j in np.append(nbors, i)) 
             barrier.wait() # all models (x^{k+1}) written
 
-            self.calc_full_local_metrics(i, k, models, probs, w_row, proj, x_prev, nbors, flagged, is_byz)
+            self.calc_full_local_metrics(i, k, models, probs, w_row, proj, x_prev, nbors, flagged, is_adv, is_hon)
             barrier.wait() # all metrics collected by all honest workers
 
             if(i == tar_node):
@@ -299,10 +297,20 @@ class SystemSimulator():
                 args=(i, self.barrier, self.models, self.int_models, self.X_train, self.y_train, self.dp, 
                       self.C, self.K, self.W, self.G, self.H,
                       self.reg_param, self.batch_sz, self.alphas, alg, rng('sys', 'byz', seed, i)),
-                kwargs={'alie_z': None, 'num_nodes':self.num_nodes, 'b': self.b,
-                        'ipm_eps':0.5})
+                kwargs={'ipm_eps':0.5, 'abstain': self.abstain})
                for i in self.B]
         else: return []
+
+    def _abstain_mask(self, atk_type):
+        a = np.zeros(self.num_nodes, dtype=bool)
+        if atk_type not in ('ALIE', 'IPM'):
+            return a
+        min_hon = 2 if atk_type == 'ALIE' else 1
+        H_set = set(int(j) for j in self.H)
+        for i in self.B:
+            n_hon = sum(int(j) in H_set for j in self.G.neighbors(int(i)))
+            a[int(i)] = n_hon < min_hon
+        return a
 
 
     def simulate(self, sim_params):
@@ -310,6 +318,9 @@ class SystemSimulator():
         atk_type = sim_params['atk_type']
         threat_model = sim_params['threat_model']
         seed = sim_params['seed']
+
+        self.abstain = self._abstain_mask(atk_type)
+        self.n_abstain = int(self.abstain.sum())     # log this per (topology, seed, b)
 
         tar_metrics = {alg : list() for alg in algorithms}
         if(threat_model == 'T0'):

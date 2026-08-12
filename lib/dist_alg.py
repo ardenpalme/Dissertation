@@ -61,26 +61,24 @@ def byz_atk(i, barrier, models, int_models, X_train, y_train, dp,
         case 'ALIE' | 'IPM':
             H_set = set(int(j) for j in H)
             hon_nbors = [int(j) for j in nbors if int(j) in H_set]
-            if not hon_nbors:
-                print(f"{RED}Warning: node {i} has no honest neighbors, {atk_type} degenerates to sign-flip behavior{RESET}")
+            n_hon = len(hon_nbors)
 
-            alie_z = _alie_z(len(nbors)+1, len(nbors)-len(hon_nbors)+1)
+            alie_z  = _alie_z(len(nbors) + 1, len(nbors) - n_hon + 1)
             ipm_eps = kwargs['ipm_eps']
 
             for k in range(K):
-                barrier.wait() 
-                if hon_nbors:
-                    x_hon = models[hon_nbors].copy() 
+                barrier.wait()
+                if kwargs['abstain'][i]:
+                    _, g = sgd_grad(Xl, yl, models[i], reg_param, batch_sz, rng)
+                    int_models[i] = models[i] - alphas[k] * g
+                else:
+                    x_hon = models[hon_nbors].copy()
                     msgs  = int_models[hon_nbors].copy()
                     if atk_type == 'ALIE':
-                        int_models[i] = msgs.mean(axis=0) - alie_z * msgs.std(axis=0)
+                        int_models[i] = msgs.mean(axis=0) - alie_z * msgs.std(axis=0, ddof=1)
                     else:
                         g_hat = (x_hon - msgs) / alphas[k]
                         int_models[i] = models[i] + ipm_eps * alphas[k] * g_hat.mean(axis=0)
-                else:
-                    flip_scale=kwargs.get('sign_flip_scale',1.0)
-                    _, g = sgd_grad(Xl, yl, models[i], reg_param, batch_sz, rng)
-                    int_models[i] = models[i] + flip_scale * alphas[k] * g
                 barrier.wait()
                 models[i] = sum(W[i, j] * int_models[j] for j in nbors + [i])
                 barrier.wait()
