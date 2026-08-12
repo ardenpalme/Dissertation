@@ -156,7 +156,7 @@ class FeaturesTransformer(BaseEstimator, TransformerMixin):
  
         feats = np.column_stack([
             cos_g, log_norm_ratio, stable_rank,
-            margin, shift_off_diag, shift_conc,
+            margin, off_conc,
             ent, ce_diff, acc,
             cos_dev_g, log_dev_norm, cos_dev_scale, cos_gbar,
             ce_diff_nbr, acc_dev,
