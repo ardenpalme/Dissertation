@@ -284,9 +284,9 @@ class SystemSimulator():
                                                self.alphas, rng('sys','sgd', seed, i))) 
                         for i in node_ids]
             elif(alg.startswith('ORACLE')):
-                oracle_id = alg.split("_")[1]
+                oracle_id = int(alg.split("_")[1])
                 return [threading.Thread(target=self.worker_RDSGD_oracle, 
-                                         args=(i, barrier, models, int_models, tar_node, tar_metrics['ORACLE'],
+                                         args=(i, barrier, models, int_models, tar_node, tar_metrics[alg],
                                                self.alphas, rng('sys','sgd', seed, i), oracle_id))
                         for i in node_ids]
 
