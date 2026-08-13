@@ -60,8 +60,8 @@ def sim_task(g, config_g, atk, s, proj_const, preproc, est, gamma_sys, rdsgd_par
 
     stationary_dist = (1 - gamma_sys) * config_g['pi']
     config_g['graph_args']['MH_target_pi'] = stationary_dist
-    config_g['oracle_params'].append({'C_fpr':rdsgd_params['C_fpr'], 'C_fnr':rdsgd_params['C_fnr']})
-    algs.append('ORACLE_0')
+    #config_g['oracle_params'].append({'C_fpr':rdsgd_params['C_fpr'], 'C_fnr':rdsgd_params['C_fnr']})
+    #algs.append('ORACLE_2')
     ss.init_simulation(config_g, proj_const, preproc, est, config_g['oracle_params'], rdsgd_params, seed('sys', s), is_printing_logs=False)
     df = ss.simulate(dict(algorithms=algs, atk_type=atk, threat_model='T3', seed=s))
     
