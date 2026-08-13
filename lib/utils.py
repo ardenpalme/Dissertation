@@ -37,7 +37,23 @@ def global_ce(theta, X, y):
     log_probs = z - np.log(np.exp(z).sum(axis=1, keepdims=True))
     return -log_probs[np.arange(len(y)), y].mean()
 
-def dirichlet_partition(labels, n_clients, alpha, rng): 
+
+def dirichlet_partition(labels, n_clients, alpha, rng):
+    labels = np.asarray(labels)
+    client_idx = [[] for _ in range(n_clients)]
+
+    for c in np.unique(labels):
+        idx_c = np.where(labels == c)[0]
+        rng.shuffle(idx_c)
+        proportions = rng.dirichlet(alpha * np.ones(n_clients))
+        splits = (np.cumsum(proportions)[:-1] * len(idx_c)).astype(int)
+        for client, part in enumerate(np.split(idx_c, splits)):
+            client_idx[client].extend(part.tolist())
+
+    return [np.array(ci) for ci in client_idx]
+
+
+def dirichlet_partition_old(labels, n_clients, alpha, rng): 
     labels = np.asarray(labels)
     m = len(labels) // n_clients
     room = np.full(n_clients, m)

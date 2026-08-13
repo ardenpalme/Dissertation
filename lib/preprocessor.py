@@ -2,14 +2,18 @@ import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 
 FEATURE_NAMES = [
-    'cos_g', 'log_norm_ratio', 'stable_rank', 'margin',
-    'offset_conc', 'entropy', 'ce_diff', 'acc',
-    'cos_dev_g', 'log_dev_norm', 'cos_dev_scale', 'cos_gbar',
-    'ce_diff_nbr', 'acc_dev', 'log_alpha', 'k_frac',
-    'descent', 'curv_rq'
+    'margin',
+    'log_dev_norm', 
+    'cos_gbar',
+    'ce_diff_nbr', 
+    'acc',
+    'stable_rank', 
+    'log_alpha', 
+    'log_norm_ratio', 
+    'cos_g', 
 ]
 
-HEAVY_FEATURES = ['log_norm_ratio', 'ce_diff', 'log_dev_norm', 'ce_diff_nbr', 'curv_rq']
+HEAVY_FEATURES = ['log_norm_ratio', 'log_dev_norm', 'ce_diff_nbr']
 
 class FeaturesTransformer(BaseEstimator, TransformerMixin):
     def __init__(self, node_id, X_local, y_local, alphas, reg_param):
