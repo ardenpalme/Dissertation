@@ -2,15 +2,15 @@ import numpy as np
 from sklearn.base import BaseEstimator, TransformerMixin
 
 FEATURE_NAMES = [
-    'margin',
-    'log_dev_norm', 
-    'cos_gbar',
-    'ce_diff_nbr', 
-    'acc',
-    'stable_rank', 
-    'log_alpha', 
-    'log_norm_ratio', 
     'cos_g', 
+    'log_norm_ratio', 
+    'margin',
+    'stable_rank', 
+    'acc',
+    'cos_gbar',
+    'log_dev_norm', 
+    'ce_diff_nbr', 
+    'log_alpha', 
 ]
 
 HEAVY_FEATURES = ['log_norm_ratio', 'log_dev_norm', 'ce_diff_nbr']
@@ -170,14 +170,17 @@ class FeaturesTransformer(BaseEstimator, TransformerMixin):
         k_frac = np.full(m, self.iter / max(K - 1, 1))
  
         feats = np.column_stack([
-            cos_g, log_norm_ratio, stable_rank,
-            margin, off_conc,
-            ent, ce_diff, acc,
-            cos_dev_g, log_dev_norm, cos_dev_scale, cos_gbar,
-            ce_diff_nbr, acc_dev,
-            log_alpha, k_frac,
-            descent, curv_rq
+            cos_g, 
+            log_norm_ratio, 
+            margin, 
+            stable_rank,
+            acc,
+            cos_gbar,
+            log_dev_norm,
+            ce_diff_nbr,
+            log_alpha,
         ])
+
 
         assert feats.shape[1] == len(FEATURE_NAMES) 
         return np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
