@@ -74,3 +74,4 @@ def sim_task(g, config_g, atk, s, proj_const, preproc, est, gamma_sys, rdsgd_par
         consts = mc(ss.get_sim_config(), ss.models, rdsgd_params['C_fpr'], rdsgd_params['C_fnr'], proj_const, stationary_dist)
         for k in ('pi', 'x_opt', 'x_pi_opt'): consts.pop(k, None)
     return g, atk, s, df, consts
+
