@@ -57,13 +57,16 @@ def sim_task(g, config_g, atk, s, proj_const, preproc, est, gamma_sys, rdsgd_par
     os.environ["PYTHONWARNINGS"] = "ignore::UserWarning"
     gd = load_dataset() 
     gf = GraphFactory(config_g['train']['num_nodes'], b)
+    if('graph_type'in config_g['sys'].keys()):
+        config_g['graph_type'] = config_g['sys']['graph_type']
+
     ss = SystemSimulator(config_g, gd, gf)
 
     stationary_dist = (1 - gamma_sys) * config_g['pi']
     config_g['graph_args']['MH_target_pi'] = stationary_dist
 
     ss.init_simulation(config_g, proj_const, preproc, est, config_g['oracle_params'], rdsgd_params, seed('sys', s), is_printing_logs=False)
-    df = ss.simulate(dict(algorithms=algs, atk_type=atk, threat_model='T3', seed=s))
+    df = ss.simulate(dict(algorithms=algs, atk_type=atk, threat_model=config_g['sys']['threat_model'], seed=s))
     
     consts = None
     if s == seeds[0]:

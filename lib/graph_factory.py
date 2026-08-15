@@ -112,7 +112,7 @@ def calc_graph_metrics(W, H, gamma_vec, pi_t):
     s2 = lam_pi ** 2 + nu2
     g = 1.0 - s2
     
-    return {'spectral_gap' : mu2, 'g':g, 'lam_pi':lam_pi, 's2':s2}
+    return {'spectral_gap' : mu2, 'g':g, 'lam_pi':lam_pi, 'nu2':nu2}
 
 def add_graph_plot(G, B, axis):
     pos = nx.kamada_kawai_layout(G)
