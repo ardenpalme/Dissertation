@@ -1,1 +1,0 @@
-Baseline run for comparison (data heterogeneity $\alpha=100$, $\mathbf{\pi}^t$ uniform, $b=5$)
