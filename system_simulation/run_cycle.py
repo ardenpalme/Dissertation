@@ -124,9 +124,9 @@ def run_cycle(config, exp_name, permute_graphs=False):
 
 if __name__ == '__main__':
     # 1. Threat Model I Baseline
-    config = copy.deepcopy(BASE_CONF)
-    config['sys']['threat_model'] = 'T0'
-    run_cycle(config, 'tm_0_baseline')
+    #config = copy.deepcopy(BASE_CONF)
+    #config['sys']['threat_model'] = 'T0'
+    #run_cycle(config, 'tm_0_baseline')
 
     # 2. Threat Model III Baseline
     config = copy.deepcopy(BASE_CONF)

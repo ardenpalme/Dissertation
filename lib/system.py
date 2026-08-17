@@ -100,20 +100,19 @@ class SystemSimulator():
             'opt_gap':        np.linalg.norm(x_pi_k - self.x_opt),
         }
 
-    def calc_realized_fpr_fnr(self,k, params):
+    def calc_realized_fpr_fnr(self,k):
         eps = 10**(-12)
         E = self.edge_log[self.H]
         tp, fp, tn, fn = E[:,k, 0], E[:,k,1], E[:,k,2], E[:,k,3]
         gamma_k = fp.sum() / (fp.sum() + tn.sum() + eps)
         beta_k = fn.sum() / (fn.sum() + tp.sum() + eps)
-        byz_w_k = (E[:,k,7] * np.asarray(params['C_fnr'])[self.H]) @ self.pi
-        Y = self.W - (np.eye(self.num_nodes) * np.diag(self.W))
-        hon_w_k = ((Y.sum(axis=1)[self.H] - E[:,k,5]) * (1 - np.asarray(params['C_fpr'])[self.H])) @ self.pi
+        exact_fpr = np.asarray(fp / (fp + tn + eps))
+        exact_fnr = np.asarray(fn / (fn + tp + eps))
+        byz_w_k = (E[:,k,7] * exact_fnr) @ self.pi
+        hon_w_k = ((1 - exact_fpr) * E[:,k,5]) @ self.pi
 
-        fp_i, tn_i = self.edge_log[self.H][:, k, 1], self.edge_log[self.H][:, k, 2]
-        gamma_k_node = fp_i / (fp_i + tn_i + eps) 
+        return dict(gamma_k=gamma_k, beta_k=beta_k, gamma_k_node=exact_fpr, beta_k_node=exact_fnr, byz_w_k=byz_w_k, hon_w_k=hon_w_k)
 
-        return dict(gamma_k=gamma_k, beta_k=beta_k, gamma_k_node=gamma_k_node, byz_w_k=byz_w_k, hon_w_k=hon_w_k)
 
     def calc_reduced_local_metrics(self, i, models): # ORACLE and Aggregators
         Xl, yl = self.X_train[self.dp[i]], self.y_train[self.dp[i]]
@@ -177,7 +176,7 @@ class SystemSimulator():
 
             if(i == tar_node):
                 metrics = self.get_metrics_summary(models)
-                metrics.update(self.calc_realized_fpr_fnr(k, self.oracle_params[oracle_id]))
+                metrics.update(self.calc_realized_fpr_fnr(k))
                 if(k % self.print_freq == 0 and k>0 and self.is_printing_logs):
                     print(f"[k={k}] "
                           f"train_loss: [{metrics['min_train_loss']:.3f},{metrics['max_train_loss']:.3f}],"
@@ -220,7 +219,7 @@ class SystemSimulator():
             if(i == tar_node):
                 metrics = self.get_metrics_summary(models)
                 metrics['rho2_k'] = float(self.pi @ self.E_sq[self.H])
-                metrics.update(self.calc_realized_fpr_fnr(k, self.rdsgd_params))
+                metrics.update(self.calc_realized_fpr_fnr(k))
                 if(k % self.print_freq == 0 and k>0 and self.is_printing_logs):
                     print(f"[k={k}] "
                           f"train_loss: [{metrics['min_train_loss']:.3f},{metrics['max_train_loss']:.3f}],"
