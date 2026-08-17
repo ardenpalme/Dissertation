@@ -123,14 +123,37 @@ def run_cycle(config, exp_name, permute_graphs=False):
     fig1.savefig(os.path.join(IMAGES_DIR, f'conv_plots.png'))
 
 if __name__ == '__main__':
+    '''
     # 1. Threat Model I Baseline
-    #config = copy.deepcopy(BASE_CONF)
-    #config['sys']['threat_model'] = 'T0'
-    #run_cycle(config, 'tm_0_baseline')
+    config = copy.deepcopy(BASE_CONF)
+    config['train']['b'] = 1
+    config['sys']['b'] = 0
+    config['sys']['threat_model'] = 'T0'
+    run_cycle(config, 'tm_0_baseline')
 
     # 2. Threat Model III Baseline
     config = copy.deepcopy(BASE_CONF)
     run_cycle(config, 'tm_3_baseline')
+
+    # 7. Worst Case
+    config = copy.deepcopy(BASE_CONF)
+    config['train']['b'] = 8
+    config['sys']['b'] = config['train']['b']
+    config['graph_args']['geom_radius'] = 0.6
+    config['pi-dir-alpha'] = 2
+    pi = rng('dir','graphs').dirichlet(np.full(NUM_NODES,config['pi-dir-alpha']))
+    config['pi'] = (pi / pi.sum())
+    config['data_heterogeneity'] = 2
+    run_cycle(config, 'worst_case')
+
+    # 5. Stress Test
+    config = copy.deepcopy(BASE_CONF)
+    config['train']['b'] = 8
+    config['sys']['b'] = config['train']['b']
+    config['graph_args']['geom_radius'] = 0.6
+    config['data_heterogeneity'] = 2
+    run_cycle(config, 'stress_test')
+    '''
 
     # 3. High Byzantine Influence
     config = copy.deepcopy(BASE_CONF)
@@ -144,14 +167,6 @@ if __name__ == '__main__':
     config['data_heterogeneity'] = 2
     run_cycle(config, 'high_data_het')
 
-    # 5. Stress Test
-    config = copy.deepcopy(BASE_CONF)
-    config['train']['b'] = 8
-    config['sys']['b'] = config['train']['b']
-    config['graph_args']['geom_radius'] = 0.6
-    config['data_heterogeneity'] = 2
-    run_cycle(config, 'stress_test')
-
     # 6. Skewed Edge Weights
     config = copy.deepcopy(BASE_CONF)
     config['pi-dir-alpha'] = 2
@@ -159,18 +174,8 @@ if __name__ == '__main__':
     config['pi'] = (pi / pi.sum())
     run_cycle(config, 'skewed_edge_weights')
 
-    # 7. Worst Case
-    config = copy.deepcopy(BASE_CONF)
-    config['train']['b'] = 8
-    config['sys']['b'] = config['train']['b']
-    config['graph_args']['geom_radius'] = 0.6
-    config['pi-dir-alpha'] = 2
-    pi = rng('dir','graphs').dirichlet(np.full(NUM_NODES,config['pi-dir-alpha']))
-    config['pi'] = (pi / pi.sum())
-    config['data_heterogeneity'] = 2
-    run_cycle(config, 'worst_case')
-
     # 8. Graph Permutation
     config = copy.deepcopy(BASE_CONF)
     run_cycle(config, 'permute_graphs', permute_graphs=True)
+
 
