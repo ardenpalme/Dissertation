@@ -16,7 +16,23 @@ GRAPH_ABBREV = {
     'erdos-renyi': 'ER',
     'barabasi-albert': 'BA',
 }
+GRAPH_FULL_NAMES = {
+    'random-regular': 'Random Regular',
+    'watts-strogatz': 'Watts-Strogatz',
+    'geometric': 'Random Geometric',
+    'erdos-renyi': 'Erdos-Renyi',
+    'barabasi-albert': 'Barabasi-Albert',
+}
+
 ATKS = ['label_flip', 'sign_flip', 'gaussian', 'ALIE', 'IPM']
+ATK_ABBREV = {
+    'label_flip': 'Label Flip',
+    'sign_flip': 'Sign Flip',
+    'gaussian': 'Gaussian',
+    'ALIE': 'ALIE',
+    'IPM': 'IPM',
+}
+
 ALGS = ['RDSGD', 'ORACLE_0', 'ORACLE_1', 'IOS', 'SCC', 'TriMean', 'CooMed']
 
 BASE_CONF = {
