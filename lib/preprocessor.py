@@ -51,30 +51,19 @@ class FeaturesTransformer(BaseEstimator, TransformerMixin):
             ce += 0.5 * self.reg_param * float((x ** 2).sum())
         return ce
 
-    def _offset_hist(self, pred_j, C):
-        """Class-balanced offset histogram q_j of eq. (20). Sums to 1."""
-        yl = self.y_local
-        off = np.zeros((C, C))
-        np.add.at(off, (yl, (pred_j - yl) % C), 1.0)
-        sup, cnt = self._sup, self._cnt
-        return (off[sup] / cnt[sup, None]).sum(axis=0) / self._n_sup
-
     def _shift_profile(self, M, U, eps=1e-12):
-        """varrho_j of eq. (21): support-restricted and sign-corrected."""
-        A = M.T @ U                                            # (C, C)
+        A = M.T @ U 
         A = A / (np.linalg.norm(M, axis=0)[:, None]
                  * np.linalg.norm(U, axis=0)[None, :] + eps)
         C = A.shape[0]
         sup = self._sup
-        return np.array([-np.mean(np.diag(np.roll(A, -s, axis=1))[sup])
-                         for s in range(C)])                   # (C,)
+        return np.array([-np.mean(np.diag(np.roll(A, -s, axis=1))[sup]) for s in range(C)]) 
 
     def transform(self, X):
-        m, d, C = X.shape # stacked int models of the m neighbours
+        m, d, C = X.shape
         eps = 1e-12
 
         self._precompute(C)
-        n_sup = self._n_sup
         w_bal = self._w_bal
  
         th_i = self.theta_ref
@@ -82,11 +71,10 @@ class FeaturesTransformer(BaseEstimator, TransformerMixin):
         gn = np.linalg.norm(gi) + eps
         Xl, yl = self.X_local, self.y_local
         alpha_k = float(self.alphas[self.iter])
-        K = len(self.alphas)
 
-        Xf = X.reshape(m, -1) # (m, D) flattened neighbour models
-        D3 = th_i[None, ...] - X # (m, d, C) raw disagreement
-        D = D3.reshape(m, -1) # (m, D)
+        Xf = X.reshape(m, -1)    # (m, d*C) flattened neighbour models
+        D3 = th_i[None, ...] - X # (m, d, C) 
+        D = D3.reshape(m, -1)    # (m, d*C)
         Dn = np.linalg.norm(D, axis=1)
 
         # Features relative to models[i]
@@ -99,75 +87,37 @@ class FeaturesTransformer(BaseEstimator, TransformerMixin):
 
         M = (Xl.T @ np.eye(C)[yl]) / len(yl)
         rho = np.array([self._shift_profile(M, D3[j]) for j in range(m)])   # (m, C)
-        margin = rho.max(axis=1) - rho[:, 0]                               # phi_4
+        margin = rho.max(axis=1) - rho[:, 0]          
 
-        logits_i = Xl @ th_i
-        ce_i = self._softmax_ce(logits_i, yl, th_i, w_bal)                       # Fbar(x_i^k)
-        pred_i = logits_i.argmax(axis=1)
-
-        ent = np.empty(m)
         ce_abs = np.empty(m)
         acc = np.empty(m)
-        off_conc = np.empty(m)
-        a_gap = np.empty(m)
-        curv  = np.empty(m)
         for j in range(m):
             logits_j = Xl @ X[j]
-            pred_j = logits_j.argmax(axis=1)
-            p = np.bincount((pred_j - pred_i) % C, minlength=C) / len(pred_i) + eps
-            ent[j] = -(p * np.log(p)).sum()
-            ce_abs[j] = self._softmax_ce(logits_j, yl, X[j], w_bal)        # phi_8 term
-            q = self._offset_hist(pred_j, C)                               # eq. (20)
-            acc[j] = q[0]                                                  # phi_9 = q_j(0)
-            err = 1.0 - q[0]                                               # Rbar
-            off_conc[j] = (q[1:].max() / err) if err > eps else 1.0 / (C - 1)
-            Xmir = 2.0 * th_i - X[j]                        # x_i^k + u_j
-            ce_mir = self._softmax_ce(Xl @ Xmir, yl, Xmir, w_bal)
-            a_gap[j] = ce_mir - ce_i
-            curv[j]  = (Dn[j] ** 2) + eps                   # ||u_j||^2
-
-        ce_diff = ce_abs - ce_i
-        b_gap = ce_abs - ce_i                               # = ce_diff = phi_8
-        descent   = (a_gap - b_gap) / (np.abs(a_gap) + np.abs(b_gap) + eps)
-        curv_rq   = (a_gap + b_gap) / curv
+            ce_abs[j] = self._softmax_ce(logits_j, yl, X[j], w_bal) 
 
         # Leave-one-out neighbourhood-relative features
         if m >= 3:
-            dev = np.empty_like(Xf)  # (m,D)
-            scl = np.empty_like(Xf)  # (m,D)
-            gbar = np.empty_like(D)  # (m,D)
+            dev = np.empty_like(Xf)  # (m, d*C)
+            gbar = np.empty_like(D)  # (m, d*C)
             ce_med = np.empty(m)
-            acc_med = np.empty(m)
             for j in range(m):
                 O = np.delete(Xf, j, axis=0)
                 mu = np.median(O, axis=0)
                 dev[j] = Xf[j] - mu
-                scl[j] = 1.4826 * np.median(np.abs(O - mu), axis=0) + eps
                 gbar[j] = np.median(np.delete(D, j, axis=0), axis=0)
                 ce_med[j] = np.median(np.delete(ce_abs, j))
-                acc_med[j] = np.median(np.delete(acc, j))
 
-            dn = np.linalg.norm(dev, axis=1)
- 
-            cos_dev_g = (dev @ gi) / (dn * gn + eps)
-            log_dev_norm = np.log(dn / (np.median(dn) + eps) + eps)
-            cos_dev_scale = ((dev * scl).sum(1) / (dn * np.linalg.norm(scl, axis=1) + eps))
+            log_dev_norm = np.log(np.linalg.norm(dev, axis=1) / (np.median(np.linalg.norm(dev, axis=1)) + eps) + eps)
             cos_gbar = ((D * gbar).sum(1) / (Dn * np.linalg.norm(gbar, axis=1) + eps))
  
             ce_diff_nbr = ce_abs - ce_med
-            acc_dev = acc - acc_med
         else:
             zeros = np.zeros(m)
-            cos_dev_g = zeros
             log_dev_norm = zeros
-            cos_dev_scale = zeros
             cos_gbar = zeros
             ce_diff_nbr = zeros
-            acc_dev = zeros
 
-        # Context Features
         log_alpha = np.full(m, np.log(alpha_k + eps))
-        k_frac = np.full(m, self.iter / max(K - 1, 1))
  
         feats = np.column_stack([
             cos_g, 
@@ -180,7 +130,6 @@ class FeaturesTransformer(BaseEstimator, TransformerMixin):
             ce_diff_nbr,
             log_alpha,
         ])
-
 
         assert feats.shape[1] == len(FEATURE_NAMES) 
         return np.nan_to_num(feats, nan=0.0, posinf=0.0, neginf=0.0)
