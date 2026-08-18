@@ -125,8 +125,8 @@ def run_cycle(config, exp_name, permute_graphs=False):
 if __name__ == '__main__':
     # 1. Threat Model I Baseline
     config = copy.deepcopy(BASE_CONF)
+    config['train']['b'] = 1
     config['sys']['b'] = 0
-    config['train']['b'] = 0
     config['sys']['threat_model'] = 'T0'
     run_cycle(config, 'tm_0_baseline')
 
@@ -175,4 +175,5 @@ if __name__ == '__main__':
     # 8. Graph Permutation
     config = copy.deepcopy(BASE_CONF)
     run_cycle(config, 'permute_graphs', permute_graphs=True)
+
 

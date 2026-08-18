@@ -1,0 +1,136 @@
+[Parallel(n_jobs=5)]: Using backend LokyBackend with 5 concurrent workers.
+==================== tm_0_baseline =====================
+[Parallel(n_jobs=5)]: Done   2 out of   5 | elapsed:  9.5min remaining: 14.2min
+[Parallel(n_jobs=5)]: Done   3 out of   5 | elapsed: 10.1min remaining:  6.7min
+[Parallel(n_jobs=5)]: Done   5 out of   5 | elapsed: 11.8min finished
+[Parallel(n_jobs=30)]: Using backend LokyBackend with 30 concurrent workers.
+Byzantine classifier trained
+[Parallel(n_jobs=30)]: Done   1 tasks      | elapsed:  8.1min
+[Parallel(n_jobs=30)]: Done  12 tasks      | elapsed:  9.4min
+[Parallel(n_jobs=30)]: Done  25 tasks      | elapsed:  9.4min
+[Parallel(n_jobs=30)]: Done  38 tasks      | elapsed: 17.6min
+[Parallel(n_jobs=30)]: Done  53 tasks      | elapsed: 18.9min
+[Parallel(n_jobs=30)]: Done  79 out of 125 | elapsed: 27.4min remaining: 16.0min
+[Parallel(n_jobs=30)]: Done  92 out of 125 | elapsed: 34.5min remaining: 12.4min
+[Parallel(n_jobs=30)]: Done 105 out of 125 | elapsed: 35.9min remaining:  6.8min
+[Parallel(n_jobs=30)]: Done 118 out of 125 | elapsed: 36.4min remaining:  2.2min
+[Parallel(n_jobs=30)]: Done 125 out of 125 | elapsed: 38.0min finished
+[Parallel(n_jobs=5)]: Using backend LokyBackend with 5 concurrent workers.
+==================== tm_3_baseline =====================
+[Parallel(n_jobs=5)]: Done   2 out of   5 | elapsed:  7.5min remaining: 11.3min
+[Parallel(n_jobs=5)]: Done   3 out of   5 | elapsed:  8.1min remaining:  5.4min
+[Parallel(n_jobs=5)]: Done   5 out of   5 | elapsed:  9.4min finished
+[Parallel(n_jobs=30)]: Using backend LokyBackend with 30 concurrent workers.
+Byzantine classifier trained
+[Parallel(n_jobs=30)]: Done   1 tasks      | elapsed:  6.3min
+[Parallel(n_jobs=30)]: Done  12 tasks      | elapsed:  7.1min
+[Parallel(n_jobs=30)]: Done  25 tasks      | elapsed:  7.2min
+[Parallel(n_jobs=30)]: Done  38 tasks      | elapsed: 13.4min
+[Parallel(n_jobs=30)]: Done  53 tasks      | elapsed: 14.3min
+[Parallel(n_jobs=30)]: Done  79 out of 125 | elapsed: 20.8min remaining: 12.1min
+[Parallel(n_jobs=30)]: Done  92 out of 125 | elapsed: 26.3min remaining:  9.4min
+[Parallel(n_jobs=30)]: Done 105 out of 125 | elapsed: 27.3min remaining:  5.2min
+[Parallel(n_jobs=30)]: Done 118 out of 125 | elapsed: 27.7min remaining:  1.6min
+[Parallel(n_jobs=30)]: Done 125 out of 125 | elapsed: 29.1min finished
+[Parallel(n_jobs=5)]: Using backend LokyBackend with 5 concurrent workers.
+====================== worst_case ======================
+[Parallel(n_jobs=5)]: Done   2 out of   5 | elapsed:  5.4min remaining:  8.1min
+[Parallel(n_jobs=5)]: Done   3 out of   5 | elapsed:  6.6min remaining:  4.4min
+[Parallel(n_jobs=5)]: Done   5 out of   5 | elapsed:  8.1min finished
+[Parallel(n_jobs=30)]: Using backend LokyBackend with 30 concurrent workers.
+Byzantine classifier trained
+[Parallel(n_jobs=30)]: Done   1 tasks      | elapsed:  5.1min
+[Parallel(n_jobs=30)]: Done  12 tasks      | elapsed:  5.8min
+[Parallel(n_jobs=30)]: Done  25 tasks      | elapsed:  5.8min
+[Parallel(n_jobs=30)]: Done  38 tasks      | elapsed: 10.8min
+[Parallel(n_jobs=30)]: Done  53 tasks      | elapsed: 11.8min
+[Parallel(n_jobs=30)]: Done  79 out of 125 | elapsed: 17.0min remaining:  9.9min
+[Parallel(n_jobs=30)]: Done  92 out of 125 | elapsed: 21.8min remaining:  7.8min
+[Parallel(n_jobs=30)]: Done 105 out of 125 | elapsed: 22.4min remaining:  4.3min
+[Parallel(n_jobs=30)]: Done 118 out of 125 | elapsed: 22.7min remaining:  1.3min
+[Parallel(n_jobs=30)]: Done 125 out of 125 | elapsed: 23.9min finished
+[Parallel(n_jobs=5)]: Using backend LokyBackend with 5 concurrent workers.
+===================== stress_test ======================
+[Parallel(n_jobs=5)]: Done   2 out of   5 | elapsed:  5.4min remaining:  8.2min
+[Parallel(n_jobs=5)]: Done   3 out of   5 | elapsed:  6.6min remaining:  4.4min
+[Parallel(n_jobs=5)]: Done   5 out of   5 | elapsed:  8.1min finished
+[Parallel(n_jobs=30)]: Using backend LokyBackend with 30 concurrent workers.
+Byzantine classifier trained
+[Parallel(n_jobs=30)]: Done   1 tasks      | elapsed:  5.1min
+[Parallel(n_jobs=30)]: Done  12 tasks      | elapsed:  5.8min
+[Parallel(n_jobs=30)]: Done  25 tasks      | elapsed:  5.9min
+[Parallel(n_jobs=30)]: Done  38 tasks      | elapsed: 10.8min
+[Parallel(n_jobs=30)]: Done  53 tasks      | elapsed: 11.9min
+[Parallel(n_jobs=30)]: Done  79 out of 125 | elapsed: 17.0min remaining:  9.9min
+[Parallel(n_jobs=30)]: Done  92 out of 125 | elapsed: 21.9min remaining:  7.8min
+[Parallel(n_jobs=30)]: Done 105 out of 125 | elapsed: 22.4min remaining:  4.3min
+[Parallel(n_jobs=30)]: Done 118 out of 125 | elapsed: 22.8min remaining:  1.3min
+[Parallel(n_jobs=30)]: Done 125 out of 125 | elapsed: 23.9min finished
+[Parallel(n_jobs=5)]: Using backend LokyBackend with 5 concurrent workers.
+======================= high_byz =======================
+[Parallel(n_jobs=5)]: Done   2 out of   5 | elapsed:  5.5min remaining:  8.2min
+[Parallel(n_jobs=5)]: Done   3 out of   5 | elapsed:  6.5min remaining:  4.3min
+[Parallel(n_jobs=5)]: Done   5 out of   5 | elapsed:  8.2min finished
+[Parallel(n_jobs=30)]: Using backend LokyBackend with 30 concurrent workers.
+Byzantine classifier trained
+[Parallel(n_jobs=30)]: Done   1 tasks      | elapsed:  5.2min
+[Parallel(n_jobs=30)]: Done  12 tasks      | elapsed:  5.8min
+[Parallel(n_jobs=30)]: Done  25 tasks      | elapsed:  5.9min
+[Parallel(n_jobs=30)]: Done  38 tasks      | elapsed: 10.9min
+[Parallel(n_jobs=30)]: Done  53 tasks      | elapsed: 11.9min
+[Parallel(n_jobs=30)]: Done  79 out of 125 | elapsed: 17.1min remaining: 10.0min
+[Parallel(n_jobs=30)]: Done  92 out of 125 | elapsed: 21.8min remaining:  7.8min
+[Parallel(n_jobs=30)]: Done 105 out of 125 | elapsed: 22.4min remaining:  4.3min
+[Parallel(n_jobs=30)]: Done 118 out of 125 | elapsed: 22.8min remaining:  1.4min
+[Parallel(n_jobs=30)]: Done 125 out of 125 | elapsed: 24.0min finished
+[Parallel(n_jobs=5)]: Using backend LokyBackend with 5 concurrent workers.
+==================== high_data_het =====================
+[Parallel(n_jobs=5)]: Done   2 out of   5 | elapsed:  7.5min remaining: 11.3min
+[Parallel(n_jobs=5)]: Done   3 out of   5 | elapsed:  8.1min remaining:  5.4min
+[Parallel(n_jobs=5)]: Done   5 out of   5 | elapsed:  9.4min finished
+[Parallel(n_jobs=30)]: Using backend LokyBackend with 30 concurrent workers.
+Byzantine classifier trained
+[Parallel(n_jobs=30)]: Done   1 tasks      | elapsed:  6.3min
+[Parallel(n_jobs=30)]: Done  12 tasks      | elapsed:  7.1min
+[Parallel(n_jobs=30)]: Done  25 tasks      | elapsed:  7.2min
+[Parallel(n_jobs=30)]: Done  38 tasks      | elapsed: 13.4min
+[Parallel(n_jobs=30)]: Done  53 tasks      | elapsed: 14.3min
+[Parallel(n_jobs=30)]: Done  79 out of 125 | elapsed: 20.9min remaining: 12.2min
+[Parallel(n_jobs=30)]: Done  92 out of 125 | elapsed: 26.6min remaining:  9.5min
+[Parallel(n_jobs=30)]: Done 105 out of 125 | elapsed: 27.5min remaining:  5.2min
+[Parallel(n_jobs=30)]: Done 118 out of 125 | elapsed: 27.8min remaining:  1.6min
+[Parallel(n_jobs=30)]: Done 125 out of 125 | elapsed: 29.2min finished
+[Parallel(n_jobs=5)]: Using backend LokyBackend with 5 concurrent workers.
+================= skewed_edge_weights ==================
+[Parallel(n_jobs=5)]: Done   2 out of   5 | elapsed:  7.5min remaining: 11.3min
+[Parallel(n_jobs=5)]: Done   3 out of   5 | elapsed:  8.1min remaining:  5.4min
+[Parallel(n_jobs=5)]: Done   5 out of   5 | elapsed:  9.4min finished
+[Parallel(n_jobs=30)]: Using backend LokyBackend with 30 concurrent workers.
+Byzantine classifier trained
+[Parallel(n_jobs=30)]: Done   1 tasks      | elapsed:  6.3min
+[Parallel(n_jobs=30)]: Done  12 tasks      | elapsed:  7.1min
+[Parallel(n_jobs=30)]: Done  25 tasks      | elapsed:  7.2min
+[Parallel(n_jobs=30)]: Done  38 tasks      | elapsed: 13.4min
+[Parallel(n_jobs=30)]: Done  53 tasks      | elapsed: 14.3min
+[Parallel(n_jobs=30)]: Done  79 out of 125 | elapsed: 20.8min remaining: 12.1min
+[Parallel(n_jobs=30)]: Done  92 out of 125 | elapsed: 26.4min remaining:  9.5min
+[Parallel(n_jobs=30)]: Done 105 out of 125 | elapsed: 27.3min remaining:  5.2min
+[Parallel(n_jobs=30)]: Done 118 out of 125 | elapsed: 27.7min remaining:  1.6min
+[Parallel(n_jobs=30)]: Done 125 out of 125 | elapsed: 29.1min finished
+[Parallel(n_jobs=5)]: Using backend LokyBackend with 5 concurrent workers.
+==================== permute_graphs ====================
+[Parallel(n_jobs=5)]: Done   2 out of   5 | elapsed:  7.5min remaining: 11.3min
+[Parallel(n_jobs=5)]: Done   3 out of   5 | elapsed:  8.1min remaining:  5.4min
+[Parallel(n_jobs=5)]: Done   5 out of   5 | elapsed:  9.4min finished
+[Parallel(n_jobs=30)]: Using backend LokyBackend with 30 concurrent workers.
+Byzantine classifier trained
+[Parallel(n_jobs=30)]: Done   1 tasks      | elapsed:  6.3min
+[Parallel(n_jobs=30)]: Done  12 tasks      | elapsed:  6.4min
+[Parallel(n_jobs=30)]: Done  25 tasks      | elapsed:  6.5min
+[Parallel(n_jobs=30)]: Done  38 tasks      | elapsed: 13.4min
+[Parallel(n_jobs=30)]: Done  53 tasks      | elapsed: 13.7min
+[Parallel(n_jobs=30)]: Done  79 out of 125 | elapsed: 20.4min remaining: 11.9min
+[Parallel(n_jobs=30)]: Done  92 out of 125 | elapsed: 26.8min remaining:  9.6min
+[Parallel(n_jobs=30)]: Done 105 out of 125 | elapsed: 27.4min remaining:  5.2min
+[Parallel(n_jobs=30)]: Done 118 out of 125 | elapsed: 27.6min remaining:  1.6min
+[Parallel(n_jobs=30)]: Done 125 out of 125 | elapsed: 29.2min finished
